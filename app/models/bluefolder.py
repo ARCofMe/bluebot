@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 
 class AssignmentSummary(BaseModel):
+    """Normalized summary of a BlueFolder assignment for bot consumption."""
     assignment_id: str
     service_request_id: str
     subject: str | None = None

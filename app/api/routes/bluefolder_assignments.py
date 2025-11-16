@@ -1,3 +1,5 @@
+"""Routes that expose BlueFolder assignment data to callers."""
+
 from fastapi import APIRouter, Query, Response
 from app.integrations.bluefolder_integration import BlueFolderIntegration
 from app.utils.cache_manager import CacheManager

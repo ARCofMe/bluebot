@@ -1,3 +1,5 @@
+"""File-backed cache helpers used for BlueFolder lookups."""
+
 import os
 import json
 import time
@@ -13,12 +15,10 @@ DEFAULT_TTL_MINUTES = 30
 
 
 class CacheManager:
-    """
-    Simple key–value cache with JSON persistence.
-    Supports TTL expiration and in-memory + on-disk caching.
-    """
+    """Simple key-value cache with JSON persistence and TTL semantics."""
 
     def __init__(self, name: str, ttl_minutes: int = DEFAULT_TTL_MINUTES):
+        """Create a cache scoped by name and TTL, loading any persisted state."""
         self.name = name
         self.ttl = ttl_minutes * 60
         self.file_path = os.path.join(CACHE_DIR, f"{name}.json")

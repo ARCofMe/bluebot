@@ -1,13 +1,17 @@
-from typing import Callable
+"""Minimal in-memory command router for Teams bot style commands."""
 
-"""Very small placeholder command router for Teams bot messages."""
+from typing import Callable
 
 
 class CommandRouter:
+    """Dispatch text commands to registered handler callables."""
+
     def __init__(self):
+        """Initialize the router with an empty handler registry."""
         self._handlers: dict[str, Callable[[str], str]] = {}
 
     def register(self, command: str, handler: Callable[[str], str]) -> None:
+        """Register a handler function for the given command keyword."""
         self._handlers[command.lower()] = handler
 
     def dispatch(self, text: str) -> str:

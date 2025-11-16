@@ -1,4 +1,4 @@
-# app/integrations/bluefolder_integration.py
+"""Integration helpers that wrap the BlueFolder API client."""
 
 import logging
 from datetime import date
@@ -9,12 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 class BlueFolderIntegration:
-    """
-    Integration layer between BlueBot and BlueFolder API.
-    Handles assignment fetching, enrichment, and caching.
-    """
+    """Integration layer between BlueBot and the BlueFolder API."""
 
     def __init__(self):
+        """Instantiate the underlying BlueFolder API client."""
         self.client = BlueFolderClient()
 
     def get_user_assignments_today(self, user_id: int):

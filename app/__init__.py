@@ -1,0 +1,1 @@
+"""BlueBot extension application package."""

@@ -10,7 +10,10 @@ from typing import Any
 
 
 class BlueFolderService:
+    """High-level helper that will proxy calls to the real BlueFolder client."""
+
     def __init__(self) -> None:
+        """Instantiate the service with a placeholder client reference."""
         # self.client = BlueFolderClient()
         self.client = None  # placeholder
 

@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 class TeamsClient:
+    """Wrapper around the HTTP client used to talk to Microsoft Teams."""
+
     def __init__(self):
+        """Create an async HTTP client session."""
         # For true bot / Graph integration, you'd store tokens / app ids here.
         self._session = httpx.AsyncClient(timeout=10)
 

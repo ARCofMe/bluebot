@@ -1,3 +1,5 @@
+"""Logging configuration helpers for the BlueBot application."""
+
 import logging
 import sys
 

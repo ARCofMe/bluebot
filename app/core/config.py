@@ -1,4 +1,5 @@
-# app/core/config.py
+"""Application configuration objects and helpers."""
+
 from pydantic_settings import BaseSettings  # <-- updated import
 
 class Settings(BaseSettings):
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
     bluefolder_account_name: str | None = None
 
     class Config:
+        """Pydantic metadata for locating the .env file."""
         env_file = ".env"
         env_file_encoding = "utf-8"
 

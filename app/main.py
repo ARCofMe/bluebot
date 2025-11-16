@@ -1,4 +1,5 @@
-# app/main.py
+"""FastAPI application entrypoint for the BlueBot extension."""
+
 from fastapi import FastAPI
 from app.api.routes import health, teams_incoming, bluefolder_assignments
 

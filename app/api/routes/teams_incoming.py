@@ -1,4 +1,4 @@
-# app/api/routes/teams_incoming.py
+"""Routes that receive Teams bot or webhook traffic."""
 
 import logging
 from fastapi import APIRouter, Request, HTTPException, status
