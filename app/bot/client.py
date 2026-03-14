@@ -58,6 +58,67 @@ def _parse_iso_date(raw: str) -> date | None:
         return None
 
 
+def _alert_tech_label(interaction: discord.Interaction) -> str:
+    discord_name = (
+        getattr(interaction.user, "display_name", None)
+        or getattr(interaction.user, "global_name", None)
+        or getattr(interaction.user, "name", None)
+        or "Unknown tech"
+    )
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        return discord_name
+
+    tech_name = None
+    for tech in bot.bluefolder.list_active_techs():
+        if tech.get("id") == tech_id:
+            tech_name = tech.get("name")
+            break
+    if tech_name:
+        return f"{discord_name} ({tech_name} / BlueFolder {tech_id})"
+    return f"{discord_name} (BlueFolder {tech_id})"
+
+
+async def _send_channel_alert(
+    interaction: discord.Interaction,
+    *,
+    title: str,
+    sr_id: int,
+    note_text: str,
+    channel_id: int | None,
+    enabled: bool,
+    customer_name: str | None = None,
+    address: str | None = None,
+) -> str | None:
+    if not enabled:
+        return None
+    if not channel_id:
+        return None
+
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception:
+            return "Dispatcher alert channel could not be loaded."
+
+    lines = [
+        f"**{title}**",
+        f"Tech: {_alert_tech_label(interaction)}",
+        f"SR: {sr_id}",
+    ]
+    if customer_name:
+        lines.append(f"Customer: {customer_name}")
+    if address:
+        lines.append(f"Address: {address}")
+    lines.append(f"Update: {note_text}")
+    try:
+        await channel.send("\n".join(lines))
+    except Exception:
+        return "Dispatcher alert could not be sent."
+    return f"Dispatcher alert sent to <#{channel_id}>."
+
+
 @bot.tree.command(description="Basic bot connectivity check.")
 async def ping(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("pong", ephemeral=True)
@@ -81,6 +142,12 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/enroute sr_id - mark yourself en route on your assigned job",
         "/start sr_id - mark yourself started on your assigned job",
         "/complete sr_id - complete your assigned job",
+        "/troubleshoot sr_id - pull recent diagnosis/work context",
+        "/no_answer sr_id [details] - log that the customer did not answer",
+        "/not_home sr_id [details] - log that the customer was not home",
+        "/access_issue sr_id details - log an access problem",
+        "/missing_part sr_id details - log a missing part issue",
+        "/damaged_part sr_id details - log a damaged part issue",
         "/note_add sr_id text - add an internal service request note",
         "/attachments sr_id - recent service request attachments",
         "/equipment sr_id - customer equipment for the job site",
@@ -323,6 +390,263 @@ async def note_add(interaction: discord.Interaction, sr_id: int, text: str) -> N
         )
         return
     await interaction.followup.send(f"Added note to service request `{sr_id}`.", ephemeral=True)
+
+
+@bot.tree.command(name="troubleshoot", description="Show recent troubleshooting context for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def troubleshoot(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    result = bot.bluefolder.build_troubleshooting_summary(sr_id)
+    if result.get("error"):
+        await interaction.followup.send(
+            f"Could not build troubleshooting summary for `{sr_id}`: {result['error']}",
+            ephemeral=True,
+        )
+        return
+
+    lines = [
+        f"SR {result['sr_id']}",
+        f"Subject: {result.get('subject') or 'n/a'}",
+    ]
+    if result.get("customer_name"):
+        lines.append(f"Customer: {result['customer_name']}")
+    if result.get("address"):
+        lines.append(f"Address: {result['address']}")
+
+    sections = result.get("sections") or {}
+    if sections:
+        label_map = {
+            "complaint": "Complaint",
+            "diagnosis": "Diagnosis",
+            "work_performed": "Work Performed",
+            "parts_needed": "Parts Needed",
+            "parts_used": "Parts Used",
+        }
+        for key in ("complaint", "diagnosis", "work_performed", "parts_needed", "parts_used"):
+            if sections.get(key):
+                lines.append(f"{label_map[key]}: {sections[key]}")
+    else:
+        lines.append("No structured troubleshooting sections found in recent labor or history.")
+
+    recent_notes = result.get("recent_notes") or []
+    if recent_notes:
+        latest = recent_notes[0]
+        lines.append(
+            f"Latest History: {(latest.get('entryType') or 'Note')} | {latest.get('dateCreated') or 'unknown'}"
+        )
+        if latest.get("text"):
+            lines.append(f"Latest Text: {latest['text'][:250]}")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="no_answer", description="Log that the customer did not answer.")
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Optional extra detail")
+async def no_answer(interaction: discord.Interaction, sr_id: int, details: str | None = None) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+    result = bot.bluefolder.log_contact_issue(
+        sr_id,
+        user_id=tech_id,
+        issue_type="no_answer",
+        details=details,
+    )
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not log no-answer for `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    alert_status = await _send_channel_alert(
+        interaction,
+        title="Customer No Answer",
+        sr_id=sr_id,
+        note_text=result.get("note_text") or "",
+        channel_id=settings.dispatcher_alert_channel_id,
+        enabled=settings.dispatcher_alert_on_contact_issue,
+        customer_name=result.get("customer_name"),
+        address=result.get("address"),
+    )
+    response_lines = [
+        f"Logged no-answer for service request `{sr_id}`.",
+        f"Time: {result.get('logged_at')}",
+        result.get("note_text") or "",
+    ]
+    if alert_status:
+        response_lines.append(alert_status)
+    await interaction.followup.send(
+        "\n".join(response_lines),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="not_home", description="Log that the customer was not home at arrival.")
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Optional extra detail")
+async def not_home(interaction: discord.Interaction, sr_id: int, details: str | None = None) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+    result = bot.bluefolder.log_contact_issue(
+        sr_id,
+        user_id=tech_id,
+        issue_type="not_home",
+        details=details,
+    )
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not log not-home for `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    alert_status = await _send_channel_alert(
+        interaction,
+        title="Customer Not Home",
+        sr_id=sr_id,
+        note_text=result.get("note_text") or "",
+        channel_id=settings.dispatcher_alert_channel_id,
+        enabled=settings.dispatcher_alert_on_contact_issue,
+        customer_name=result.get("customer_name"),
+        address=result.get("address"),
+    )
+    response_lines = [
+        f"Logged not-home for service request `{sr_id}`.",
+        f"Time: {result.get('logged_at')}",
+        result.get("note_text") or "",
+    ]
+    if alert_status:
+        response_lines.append(alert_status)
+    await interaction.followup.send(
+        "\n".join(response_lines),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="access_issue", description="Log an access problem for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Access problem details")
+async def access_issue(interaction: discord.Interaction, sr_id: int, details: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+    result = bot.bluefolder.log_contact_issue(
+        sr_id,
+        user_id=tech_id,
+        issue_type="access_issue",
+        details=details,
+    )
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not log access issue for `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    alert_status = await _send_channel_alert(
+        interaction,
+        title="Access Issue",
+        sr_id=sr_id,
+        note_text=result.get("note_text") or "",
+        channel_id=settings.dispatcher_alert_channel_id,
+        enabled=settings.dispatcher_alert_on_contact_issue,
+        customer_name=result.get("customer_name"),
+        address=result.get("address"),
+    )
+    response_lines = [
+        f"Logged access issue for service request `{sr_id}`.",
+        f"Time: {result.get('logged_at')}",
+        result.get("note_text") or "",
+    ]
+    if alert_status:
+        response_lines.append(alert_status)
+    await interaction.followup.send(
+        "\n".join(response_lines),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="missing_part", description="Log a missing part issue for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Missing part details")
+async def missing_part(interaction: discord.Interaction, sr_id: int, details: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+    result = bot.bluefolder.log_parts_issue(
+        sr_id,
+        user_id=tech_id,
+        issue_type="missing_part",
+        details=details,
+    )
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not log missing-part issue for `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    alert_status = await _send_channel_alert(
+        interaction,
+        title="Missing Part",
+        sr_id=sr_id,
+        note_text=result.get("note_text") or "",
+        channel_id=settings.parts_alert_channel_id,
+        enabled=settings.parts_alert_on_contact_issue,
+        customer_name=result.get("customer_name"),
+        address=result.get("address"),
+    )
+    response_lines = [
+        f"Logged missing-part issue for service request `{sr_id}`.",
+        f"Time: {result.get('logged_at')}",
+        result.get("note_text") or "",
+    ]
+    if alert_status:
+        response_lines.append(alert_status)
+    await interaction.followup.send("\n".join(response_lines), ephemeral=True)
+
+
+@bot.tree.command(name="damaged_part", description="Log a damaged part issue for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Damaged part details")
+async def damaged_part(interaction: discord.Interaction, sr_id: int, details: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+    result = bot.bluefolder.log_parts_issue(
+        sr_id,
+        user_id=tech_id,
+        issue_type="damaged_part",
+        details=details,
+    )
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not log damaged-part issue for `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    alert_status = await _send_channel_alert(
+        interaction,
+        title="Damaged Part",
+        sr_id=sr_id,
+        note_text=result.get("note_text") or "",
+        channel_id=settings.parts_alert_channel_id,
+        enabled=settings.parts_alert_on_contact_issue,
+        customer_name=result.get("customer_name"),
+        address=result.get("address"),
+    )
+    response_lines = [
+        f"Logged damaged-part issue for service request `{sr_id}`.",
+        f"Time: {result.get('logged_at')}",
+        result.get("note_text") or "",
+    ]
+    if alert_status:
+        response_lines.append(alert_status)
+    await interaction.followup.send("\n".join(response_lines), ephemeral=True)
 
 
 @bot.tree.command(name="eta", description="Record an ETA update for your assigned service request.")

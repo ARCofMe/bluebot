@@ -28,6 +28,10 @@ Important variables:
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_GUILD_ID` (optional, but recommended while developing)
 - `DISCORD_TECH_MAP` JSON mapping of Discord user IDs to BlueFolder tech IDs for `/my_jobs` and `/next_job`
+- `DISPATCHER_ALERT_CHANNEL_ID` to post no-answer, not-home, and access-issue alerts into a dispatcher-visible Discord channel
+- `DISPATCHER_ALERT_ON_CONTACT_ISSUE` to enable or disable those channel notifications
+- `PARTS_ALERT_CHANNEL_ID` to post missing-part and damaged-part alerts into a parts-facing Discord channel
+- `PARTS_ALERT_ON_CONTACT_ISSUE` to enable or disable those parts-channel notifications
 - `BLUEFOLDER_API_KEY`
 - `BLUEFOLDER_ACCOUNT_NAME`
 - `BLUEFOLDER_BASE_URL` / `BLUEFOLDER_HOST_HEADER` when your working setup uses an IP-based BlueFolder endpoint
@@ -36,6 +40,8 @@ Important variables:
 - `ASSIGNMENT_CACHE_TTL_SECONDS` to cache per-tech assignment windows and reduce repeated BlueFolder calls
 - `WORKFLOW_WRITE_ASSIGNMENT` to control whether `/eta`, `/enroute`, `/start`, and `/complete` write to assignment records
 - `WORKFLOW_WRITE_SR_NOTE` to control whether those workflow commands also append internal service request notes
+- `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_BEFORE` to allow workflow commands to match assignments before today
+- `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_AFTER` to allow workflow commands to match assignments after today
 - `WAIVER_BASE_URL` to enable `/waiver`
 - `WAIVER_SR_PARAM`, `WAIVER_NAME_PARAM`, `WAIVER_FIRST_NAME_PARAM`, and `WAIVER_LAST_NAME_PARAM` to control the waiver query-string keys
 
@@ -61,6 +67,11 @@ Important variables:
 - `/enroute sr_id:<id>` records an en-route update for your assigned job.
 - `/start sr_id:<id>` records that work has started on your assigned job.
 - `/complete sr_id:<id>` completes your assigned assignment in BlueFolder.
+- `/no_answer sr_id:<id> [details]` logs that the customer did not answer.
+- `/not_home sr_id:<id> [details]` logs that the customer was not home at arrival.
+- `/access_issue sr_id:<id> details:<text>` logs an access problem for the job.
+- `/missing_part sr_id:<id> details:<text>` logs a missing part issue for the job.
+- `/damaged_part sr_id:<id> details:<text>` logs a damaged part issue for the job.
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 
 ### Service Request Detail
@@ -70,6 +81,7 @@ Important variables:
 - `/site sr_id:<id>` shows the site address and site notes.
 - `/notes sr_id:<id>` shows the most recent service request comments.
 - `/history sr_id:<id>` shows a broader service request history feed.
+- `/troubleshoot sr_id:<id>` pulls recent complaint, diagnosis, and work-performed context when available.
 - `/note_add sr_id:<id> text:<text>` adds an internal service request note.
 - `/attachments sr_id:<id>` lists recent service request attachments.
 - `/equipment sr_id:<id>` lists equipment for the customer/site.
@@ -100,7 +112,10 @@ BlueBot does not keep its own database for technician workflow state.
 - ETA, en route, and start updates are written to BlueFolder in two places: the assignment comment for the mapped technician's assignment and an internal service request note.
 - Complete uses BlueFolder's assignment completion endpoint and also writes an internal service request note.
 - The write targets are configuration-driven with `WORKFLOW_WRITE_ASSIGNMENT=true` and `WORKFLOW_WRITE_SR_NOTE=true`.
+- Assignment ownership is still enforced, but the lookup window is configurable with `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_BEFORE` and `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_AFTER`. For example, `0` and `7` allows testing against the next week's assigned jobs.
 - The bot's in-memory assignment cache is only a short-lived read cache to reduce repeated BlueFolder calls. It is cleared after workflow writes so the next lookup reflects current BlueFolder state.
+- No-answer, not-home, and access-issue commands can also post a dispatcher-facing alert to a Discord channel when `DISPATCHER_ALERT_CHANNEL_ID` is configured.
+- Missing-part and damaged-part commands can also post to a separate parts-facing Discord channel when `PARTS_ALERT_CHANNEL_ID` is configured.
 
 This means BlueFolder remains the system of record for ETA, start time, and completion history.
 
@@ -109,5 +124,5 @@ This means BlueFolder remains the system of record for ETA, start time, and comp
 - Writing waiver links or signed state back to BlueFolder custom fields.
 - Technician-facing reminders for overdue jobs, closeout tasks, and upcoming assignments.
 - Route-aware dispatcher commands like `/route_today` and task suggestions.
-- Troubleshooting helpers, policy lookups, and closeout checklists.
+- Richer troubleshooting helpers, policy lookups, and closeout checklists.
 - Packaging for long-running deployment on Debian or Raspberry Pi.

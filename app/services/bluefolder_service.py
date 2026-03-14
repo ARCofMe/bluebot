@@ -481,12 +481,38 @@ class BlueFolderService:
             )
         return sorted(results, key=lambda item: item.get("start") or "")
 
-    def get_assignment_for_sr_today(self, user_id: int, sr_id: int) -> dict[str, Any] | None:
+    def get_assignment_for_sr_window(
+        self,
+        user_id: int,
+        sr_id: int,
+        *,
+        start_day: date,
+        end_day: date,
+    ) -> dict[str, Any] | None:
         target = str(sr_id)
-        for assignment in self.get_assignments_for_user_today(user_id):
+        for assignment in self.get_assignments_for_user_window(
+            user_id,
+            start_day=start_day,
+            end_day=end_day,
+        ):
             if str(assignment.get("service_request_id") or "") == target:
                 return assignment
         return None
+
+    def get_assignment_for_sr_in_workflow_window(self, user_id: int, sr_id: int) -> dict[str, Any] | None:
+        today = date.today()
+        start_day = today.fromordinal(
+            today.toordinal() - max(int(settings.workflow_assignment_lookup_days_before), 0)
+        )
+        end_day = today.fromordinal(
+            today.toordinal() + max(int(settings.workflow_assignment_lookup_days_after), 0)
+        )
+        return self.get_assignment_for_sr_window(
+            user_id,
+            sr_id,
+            start_day=start_day,
+            end_day=end_day,
+        )
 
     def get_dispatch_loads_for_day(self, day: date, limit: int = 10) -> list[dict[str, Any]]:
         """Summarize assignment counts for active techs on a given day."""
@@ -793,6 +819,204 @@ class BlueFolderService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @classmethod
+    def _extract_labeled_sections(cls, text: str | None) -> dict[str, str]:
+        if not text:
+            return {}
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        labels = {
+            "cx complaint": "complaint",
+            "customer complaint": "complaint",
+            "diagnosis": "diagnosis",
+            "work performed": "work_performed",
+            "parts needed": "parts_needed",
+            "parts used": "parts_used",
+        }
+        found: dict[str, str] = {}
+        current_key: str | None = None
+        chunks: list[str] = []
+
+        def flush() -> None:
+            nonlocal current_key, chunks
+            if current_key and chunks and current_key not in found:
+                value = cls._clean_text(" ".join(chunks))
+                if value:
+                    found[current_key] = value
+            current_key = None
+            chunks = []
+
+        for raw_line in normalized.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            lowered = line.casefold()
+            matched_key = None
+            rest = ""
+            for label, key in labels.items():
+                prefix = f"{label} -"
+                if lowered.startswith(prefix):
+                    matched_key = key
+                    rest = line[len(prefix):].strip()
+                    break
+                prefix = f"{label}:"
+                if lowered.startswith(prefix):
+                    matched_key = key
+                    rest = line[len(prefix):].strip()
+                    break
+            if matched_key:
+                flush()
+                current_key = matched_key
+                if rest:
+                    chunks.append(rest)
+                continue
+            if current_key:
+                chunks.append(line)
+        flush()
+        return found
+
+    def build_troubleshooting_summary(self, sr_id: int) -> dict[str, Any]:
+        item = self.get_service_request(sr_id)
+        if item.get("error"):
+            return item
+        if not item:
+            return {"error": "Service request not found."}
+
+        labor_rows = self.get_service_request_labor(sr_id, limit=3)
+        notes = self.get_service_request_notes(sr_id, limit=8)
+
+        sections: dict[str, str] = {}
+        source_text = None
+        for row in labor_rows:
+            description = row.get("description")
+            extracted = self._extract_labeled_sections(description)
+            if extracted:
+                sections = extracted
+                source_text = description
+                break
+
+        if not sections:
+            for note in notes:
+                extracted = self._extract_labeled_sections(note.get("text"))
+                if extracted:
+                    sections = extracted
+                    source_text = note.get("text")
+                    break
+
+        summary = {
+            "sr_id": item["id"],
+            "subject": item.get("subject"),
+            "customer_name": item.get("customer_name"),
+            "address": item.get("address"),
+            "sections": sections,
+            "recent_notes": notes[:3],
+            "latest_labor": labor_rows[:2],
+            "source_text": source_text,
+        }
+        return summary
+
+    def log_contact_issue(
+        self,
+        sr_id: int,
+        *,
+        user_id: int,
+        issue_type: str,
+        details: str | None = None,
+    ) -> dict[str, Any]:
+        assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
+        if not assignment:
+            return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
+
+        item = self.get_service_request(sr_id)
+        now = datetime.now().replace(second=0, microsecond=0)
+        contact_bits: list[str] = []
+        if item.get("customer_phone"):
+            contact_bits.append(f"phone={item['customer_phone']}")
+        if item.get("customer_email"):
+            contact_bits.append(f"email={item['customer_email']}")
+        contact_text = f" Contact info: {', '.join(contact_bits)}." if contact_bits else ""
+        detail_text = f" Details: {details.strip()}." if details and details.strip() else ""
+
+        if issue_type == "no_answer":
+            text = (
+                f"Customer no-answer at {now.strftime('%I:%M %p').lstrip('0')}."
+                f"{contact_text}{detail_text}"
+            )
+        elif issue_type == "not_home":
+            text = (
+                f"Customer not home at arrival at {now.strftime('%I:%M %p').lstrip('0')}."
+                f"{contact_text}{detail_text}"
+            )
+        else:
+            text = (
+                f"Access issue reported at {now.strftime('%I:%M %p').lstrip('0')}."
+                f"{contact_text}{detail_text}"
+            )
+
+        result = self.add_service_request_note(
+            sr_id,
+            text,
+            user_id=user_id,
+            visible_to_customer=False,
+        )
+        if not result.get("ok"):
+            return result
+        return {
+            "ok": True,
+            "logged_at": now.isoformat(timespec="minutes"),
+            "note_text": text,
+            "issue_type": issue_type,
+            "customer_name": item.get("customer_name"),
+            "address": item.get("address"),
+            "customer_phone": item.get("customer_phone"),
+            "customer_email": item.get("customer_email"),
+        }
+
+    def log_parts_issue(
+        self,
+        sr_id: int,
+        *,
+        user_id: int,
+        issue_type: str,
+        details: str,
+    ) -> dict[str, Any]:
+        assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
+        if not assignment:
+            return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
+
+        item = self.get_service_request(sr_id)
+        now = datetime.now().replace(second=0, microsecond=0)
+        detail_text = self._clean_text(details)
+        if not detail_text:
+            return {"ok": False, "error": "Part details are required."}
+
+        if issue_type == "missing_part":
+            text = (
+                f"Missing part reported at {now.strftime('%I:%M %p').lstrip('0')}. "
+                f"Details: {detail_text}."
+            )
+        else:
+            text = (
+                f"Damaged part reported at {now.strftime('%I:%M %p').lstrip('0')}. "
+                f"Details: {detail_text}."
+            )
+
+        result = self.add_service_request_note(
+            sr_id,
+            text,
+            user_id=user_id,
+            visible_to_customer=False,
+        )
+        if not result.get("ok"):
+            return result
+        return {
+            "ok": True,
+            "logged_at": now.isoformat(timespec="minutes"),
+            "note_text": text,
+            "issue_type": issue_type,
+            "customer_name": item.get("customer_name"),
+            "address": item.get("address"),
+        }
+
     def _bluefolder_ok(self, response: Any) -> dict[str, Any]:
         if response is None:
             return {"ok": False, "error": "Empty BlueFolder response."}
@@ -875,9 +1099,9 @@ class BlueFolderService:
         user_id: int,
         minutes: int,
     ) -> dict[str, Any]:
-        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
         if not assignment:
-            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+            return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
         eta_at = datetime.now().replace(second=0, microsecond=0)
         eta_msg = f"ETA update: arriving in {minutes} minutes."
         write_result = self._write_workflow_update(
@@ -897,9 +1121,9 @@ class BlueFolderService:
         }
 
     def mark_enroute(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
-        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
         if not assignment:
-            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+            return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
         now = datetime.now().replace(second=0, microsecond=0)
         text = f"Technician en route at {now.strftime('%I:%M %p').lstrip('0')}."
         write_result = self._write_workflow_update(
@@ -918,9 +1142,9 @@ class BlueFolderService:
         }
 
     def mark_start(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
-        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
         if not assignment:
-            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+            return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
         now = datetime.now().replace(second=0, microsecond=0)
         text = f"Technician started work at {now.strftime('%I:%M %p').lstrip('0')}."
         write_result = self._write_workflow_update(
@@ -939,9 +1163,9 @@ class BlueFolderService:
         }
 
     def mark_complete(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
-        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
         if not assignment:
-            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+            return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
         now = datetime.now().replace(second=0, microsecond=0)
         text = f"Technician marked assignment complete at {now.strftime('%I:%M %p').lstrip('0')}."
         write_result = self._write_workflow_update(

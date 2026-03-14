@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     discord_bot_token: str
     discord_guild_id: int | None = None
     discord_tech_map: str | None = None
+    dispatcher_alert_channel_id: int | None = None
+    dispatcher_alert_on_contact_issue: bool = True
+    parts_alert_channel_id: int | None = None
+    parts_alert_on_contact_issue: bool = True
 
     bluefolder_api_key: str | None = None
     bluefolder_account_name: str | None = None
@@ -29,6 +33,8 @@ class Settings(BaseSettings):
     assignment_cache_ttl_seconds: int = 120
     workflow_write_assignment: bool = True
     workflow_write_sr_note: bool = True
+    workflow_assignment_lookup_days_before: int = 0
+    workflow_assignment_lookup_days_after: int = 0
 
     waiver_base_url: str | None = None
     waiver_sr_param: str = "sr"
