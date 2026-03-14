@@ -6,7 +6,8 @@ import html
 import os
 import re
 import sys
-from datetime import datetime
+import time
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -44,12 +45,16 @@ class BlueFolderService:
         if settings.bluefolder_timeout_seconds is not None:
             os.environ["BLUEFOLDER_TIMEOUT_SECONDS"] = str(settings.bluefolder_timeout_seconds)
 
+        if settings.bluefolder_verify_ssl is False:
+            self._suppress_insecure_request_warnings()
+
         from bluefolder_api.client import BlueFolderClient  # type: ignore
 
         client_kwargs = {}
         if settings.bluefolder_base_url:
             client_kwargs["base_url"] = settings.bluefolder_base_url
         self.client = BlueFolderClient(**client_kwargs)
+        self._assignment_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
 
     def _ensure_runtime_dependencies(self) -> None:
         """Fail fast when the HTTP client dependency is missing."""
@@ -59,6 +64,35 @@ class BlueFolderService:
             raise RuntimeError(
                 "Missing Python dependency 'requests'. Run `python -m pip install -r requirements.txt` in bluebot-discord-extension."
             ) from exc
+
+    @staticmethod
+    def _suppress_insecure_request_warnings() -> None:
+        """Hide urllib3 TLS warnings for the current IP-based BlueFolder setup."""
+        try:
+            import urllib3
+
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+
+    def _get_cached_assignments(self, key: tuple[Any, ...]) -> list[dict[str, Any]] | None:
+        ttl = max(int(settings.assignment_cache_ttl_seconds), 0)
+        if ttl <= 0:
+            return None
+        cached = self._assignment_cache.get(key)
+        if not cached:
+            return None
+        cached_at, value = cached
+        if time.monotonic() - cached_at > ttl:
+            self._assignment_cache.pop(key, None)
+            return None
+        return value
+
+    def _set_cached_assignments(self, key: tuple[Any, ...], value: list[dict[str, Any]]) -> None:
+        ttl = max(int(settings.assignment_cache_ttl_seconds), 0)
+        if ttl <= 0:
+            return
+        self._assignment_cache[key] = (time.monotonic(), value)
 
     @staticmethod
     def _clean_text(value: str | None) -> str | None:
@@ -295,7 +329,49 @@ class BlueFolderService:
         return None
 
     def get_assignments_for_user_today(self, user_id: int) -> list[dict[str, Any]]:
-        assignments = self.client.assignments.list_for_user_today(user_id)
+        return self.get_assignments_for_user_day(user_id, day=date.today())
+
+    def get_assignments_for_user_day(self, user_id: int, day: date) -> list[dict[str, Any]]:
+        cache_key = ("day", user_id, day.isoformat())
+        cached = self._get_cached_assignments(cache_key)
+        if cached is not None:
+            return cached
+        start_date = f"{day.strftime('%Y.%m.%d')} 12:00 AM"
+        end_date = f"{day.strftime('%Y.%m.%d')} 11:59 PM"
+        assignments = self.client.assignments.list_for_user_range(
+            user_id,
+            start_date,
+            end_date,
+            date_range_type="scheduled",
+        )
+        enriched = self._enrich_assignments(assignments)
+        self._set_cached_assignments(cache_key, enriched)
+        return enriched
+
+    def get_assignments_for_user_window(
+        self,
+        user_id: int,
+        *,
+        start_day: date,
+        end_day: date,
+    ) -> list[dict[str, Any]]:
+        cache_key = ("window", user_id, start_day.isoformat(), end_day.isoformat())
+        cached = self._get_cached_assignments(cache_key)
+        if cached is not None:
+            return cached
+        start_date = f"{start_day.strftime('%Y.%m.%d')} 12:00 AM"
+        end_date = f"{end_day.strftime('%Y.%m.%d')} 11:59 PM"
+        assignments = self.client.assignments.list_for_user_range(
+            user_id,
+            start_date,
+            end_date,
+            date_range_type="scheduled",
+        )
+        enriched = self._enrich_assignments(assignments)
+        self._set_cached_assignments(cache_key, enriched)
+        return enriched
+
+    def _enrich_assignments(self, assignments: list[dict[str, Any]]) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for a in assignments:
             sr_id = a.get("serviceRequestId")
@@ -322,12 +398,12 @@ class BlueFolderService:
             )
         return sorted(results, key=lambda item: item.get("start") or "")
 
-    def get_dispatch_loads_today(self, limit: int = 10) -> list[dict[str, Any]]:
-        """Summarize today's assignment counts for active techs."""
+    def get_dispatch_loads_for_day(self, day: date, limit: int = 10) -> list[dict[str, Any]]:
+        """Summarize assignment counts for active techs on a given day."""
         loads: list[dict[str, Any]] = []
         for tech in self.list_active_techs():
             try:
-                assignments = self.get_assignments_for_user_today(tech["id"])
+                assignments = self.get_assignments_for_user_day(tech["id"], day)
             except Exception:
                 assignments = []
             loads.append(
@@ -341,13 +417,17 @@ class BlueFolderService:
         loads.sort(key=lambda item: (-item["assignment_count"], item["tech_name"].casefold()))
         return loads[:limit]
 
-    def find_sr_assignment_today(self, sr_id: int) -> list[dict[str, Any]]:
-        """Find which active techs are assigned to a given SR today."""
+    def find_sr_assignment_window(self, sr_id: int, *, start_day: date, end_day: date) -> list[dict[str, Any]]:
+        """Find which active techs are assigned to a given SR in a date window."""
         matches: list[dict[str, Any]] = []
         target = str(sr_id)
         for tech in self.list_active_techs():
             try:
-                assignments = self.get_assignments_for_user_today(tech["id"])
+                assignments = self.get_assignments_for_user_window(
+                    tech["id"],
+                    start_day=start_day,
+                    end_day=end_day,
+                )
             except Exception:
                 continue
             for assignment in assignments:

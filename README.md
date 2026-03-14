@@ -33,6 +33,7 @@ Important variables:
 - `BLUEFOLDER_BASE_URL` / `BLUEFOLDER_HOST_HEADER` when your working setup uses an IP-based BlueFolder endpoint
 - `BLUEFOLDER_API_PATH` (optional override; otherwise the bot looks for a sibling `../bluefolder-api` repo)
 - `BLUEFOLDER_COMMENT_USER_ID` fallback BlueFolder user ID for `note_add` when the Discord user is not mapped in `DISCORD_TECH_MAP`
+- `ASSIGNMENT_CACHE_TTL_SECONDS` to cache per-tech assignment windows and reduce repeated BlueFolder calls
 - `WAIVER_BASE_URL` to enable `/waiver`
 - `WAIVER_SR_PARAM`, `WAIVER_NAME_PARAM`, `WAIVER_FIRST_NAME_PARAM`, and `WAIVER_LAST_NAME_PARAM` to control the waiver query-string keys
 
@@ -65,7 +66,8 @@ Important variables:
 - `/user user_id:<id>` looks up a BlueFolder user.
 - `/customer_lookup customer_id:<id>` looks up a BlueFolder customer.
 - `/tech_loads` shows today's assignment counts by technician.
-- `/who_has_sr sr_id:<id>` finds who has a service request assigned today.
+- `/tech_day tech_id:<id> when:<YYYY-MM-DD>` shows one technician's assignments on a specific day.
+- `/who_has_sr sr_id:<id>` finds who has a service request assigned in the next 14 days.
 - `/bf_status` shows BlueFolder connectivity/config status.
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 

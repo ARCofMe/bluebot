@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -49,6 +51,13 @@ def _my_tech_help() -> str:
     )
 
 
+def _parse_iso_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat(raw)
+    except Exception:
+        return None
+
+
 @bot.tree.command(description="Basic bot connectivity check.")
 async def ping(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("pong", ephemeral=True)
@@ -78,7 +87,8 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/user user_id - BlueFolder user lookup",
         "/customer_lookup customer_id - BlueFolder customer lookup",
         "/tech_loads - today's assignment counts by tech",
-        "/who_has_sr sr_id - find who has a service request today",
+        "/tech_day tech_id date - assignments for one tech on a specific day",
+        "/who_has_sr sr_id - find who has a service request in the next 14 days",
         "/bf_status - BlueFolder connectivity/config status",
         "/waiver sr_id - generate the prefilled waiver link",
     ]
@@ -506,7 +516,7 @@ async def bf_status(interaction: discord.Interaction) -> None:
 @bot.tree.command(name="tech_loads", description="Show today's assignment counts by technician.")
 async def tech_loads(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.get_dispatch_loads_today(limit=15)
+    rows = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=15)
     if not rows:
         await interaction.followup.send("No technician load data available.", ephemeral=True)
         return
@@ -523,13 +533,51 @@ async def tech_loads(interaction: discord.Interaction) -> None:
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
-@bot.tree.command(name="who_has_sr", description="Find who has a service request today.")
+@bot.tree.command(name="tech_day", description="Show assignments for a technician on a specific day.")
+@app_commands.describe(
+    tech_id="BlueFolder technician user ID",
+    when="Date in YYYY-MM-DD format",
+)
+async def tech_day(interaction: discord.Interaction, tech_id: int, when: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    day = _parse_iso_date(when)
+    if not day:
+        await interaction.followup.send("Use YYYY-MM-DD for the date.", ephemeral=True)
+        return
+
+    assignments = bot.bluefolder.get_assignments_for_user_day(tech_id, day)
+    if not assignments:
+        await interaction.followup.send(
+            f"No assignments found for tech `{tech_id}` on `{when}`.",
+            ephemeral=True,
+        )
+        return
+
+    lines = []
+    for idx, item in enumerate(assignments[:20], start=1):
+        bits = [
+            f"SR {item.get('service_request_id') or '?'}",
+            item.get("start_display") or item.get("start") or "unscheduled",
+            item.get("subject") or "Service Request",
+        ]
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="who_has_sr", description="Find who has a service request in the next 14 days.")
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def who_has_sr(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.find_sr_assignment_today(sr_id)
+    rows = bot.bluefolder.find_sr_assignment_window(
+        sr_id,
+        start_day=date.today(),
+        end_day=date.today() + timedelta(days=14),
+    )
     if not rows:
-        await interaction.followup.send(f"No active-tech assignment found today for `{sr_id}`.", ephemeral=True)
+        await interaction.followup.send(
+            f"No active-tech assignment found in the next 14 days for `{sr_id}`.",
+            ephemeral=True,
+        )
         return
 
     lines = []

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     bluefolder_verify_ssl: bool | None = None
     bluefolder_timeout_seconds: float | None = None
     bluefolder_comment_user_id: int | None = None
+    assignment_cache_ttl_seconds: int = 120
 
     waiver_base_url: str | None = None
     waiver_sr_param: str = "sr"
