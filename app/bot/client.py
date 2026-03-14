@@ -67,7 +67,12 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/customer sr_id - customer and contact details",
         "/site sr_id - site address and site notes",
         "/notes sr_id - recent service request notes",
+        "/history sr_id - broader service request history",
         "/note_add sr_id text - add an internal service request note",
+        "/attachments sr_id - recent service request attachments",
+        "/equipment sr_id - customer equipment for the job site",
+        "/search_customer text - search recent service requests by customer/subject",
+        "/search_address text - search recent service requests by address/city/state",
         "/waiver sr_id - generate the prefilled waiver link",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -257,6 +262,29 @@ async def notes(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.followup.send("\n\n---\n\n".join(blocks), ephemeral=True)
 
 
+@bot.tree.command(name="history", description="Show broader service request history.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def history(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    entries = bot.bluefolder.get_service_request_history(sr_id, limit=10)
+    if not entries:
+        await interaction.followup.send(f"No history found for `{sr_id}`.", ephemeral=True)
+        return
+
+    blocks = []
+    for idx, entry in enumerate(entries, start=1):
+        blocks.append(
+            "\n".join(
+                [
+                    f"**{idx}. {entry.get('entryType') or 'History'}**",
+                    f"`{entry.get('dateCreated') or 'unknown'}` by **{entry.get('author') or 'Unknown'}**",
+                    entry.get("text") or "",
+                ]
+            )
+        )
+    await interaction.followup.send("\n\n---\n\n".join(blocks), ephemeral=True)
+
+
 @bot.tree.command(name="note_add", description="Add an internal note to a service request.")
 @app_commands.describe(sr_id="BlueFolder service request ID", text="Note text to append")
 async def note_add(interaction: discord.Interaction, sr_id: int, text: str) -> None:
@@ -274,6 +302,83 @@ async def note_add(interaction: discord.Interaction, sr_id: int, text: str) -> N
         )
         return
     await interaction.followup.send(f"Added note to service request `{sr_id}`.", ephemeral=True)
+
+
+@bot.tree.command(name="attachments", description="List recent attachments for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def attachments(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.get_service_request_attachments(sr_id)
+    if not rows:
+        await interaction.followup.send(f"No attachments found for `{sr_id}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        when = row.get("postedOn") or row.get("dateCreated") or "unknown"
+        bits = [row.get("fileName") or "attachment", f"type={row.get('fileType') or 'n/a'}", when]
+        if row.get("description"):
+            bits.append(row["description"])
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="equipment", description="List customer equipment for a service request site.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def equipment(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.get_service_request_equipment(sr_id)
+    if not rows:
+        await interaction.followup.send(f"No equipment found for `{sr_id}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [row.get("name") or "Equipment"]
+        if row.get("model"):
+            bits.append(f"model={row['model']}")
+        if row.get("serialNumber"):
+            bits.append(f"serial={row['serialNumber']}")
+        if row.get("installDate"):
+            bits.append(f"installed={row['installDate']}")
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="search_customer", description="Search recent service requests by customer/subject.")
+@app_commands.describe(text="Customer or subject text")
+async def search_customer(interaction: discord.Interaction, text: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.search_recent_service_requests(text, field="customer")
+    if not rows:
+        await interaction.followup.send(f"No recent service requests matched `{text}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [f"SR {row.get('id')}", row.get("subject") or "Service Request"]
+        if row.get("address"):
+            bits.append(row["address"])
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="search_address", description="Search recent service requests by address or city.")
+@app_commands.describe(text="Address, city, state, or zip text")
+async def search_address(interaction: discord.Interaction, text: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.search_recent_service_requests(text, field="address")
+    if not rows:
+        await interaction.followup.send(f"No recent service requests matched `{text}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [f"SR {row.get('id')}", row.get("subject") or "Service Request"]
+        if row.get("address"):
+            bits.append(row["address"])
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
 @bot.tree.command(name="waiver", description="Generate a prefilled waiver link for a service request.")

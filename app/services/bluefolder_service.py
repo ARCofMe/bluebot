@@ -6,7 +6,7 @@ import html
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -151,6 +151,24 @@ class BlueFolderService:
             }
         except Exception:
             return None
+
+    @staticmethod
+    def _equipment_from_sr(sr: Any) -> list[dict[str, Any]]:
+        """Parse embedded equipment blocks from an SR payload."""
+        items: list[dict[str, Any]] = []
+        for node in sr.findall(".//equipmentToService/equipmentItem"):
+            items.append(
+                {
+                    "id": node.findtext("equipmentId"),
+                    "name": node.findtext("equipName"),
+                    "model": node.findtext("modelNo"),
+                    "serialNumber": node.findtext("serialNo"),
+                    "manufacturer": node.findtext("mfrName"),
+                    "type": node.findtext("equipType"),
+                    "reference": node.findtext("refNo"),
+                }
+            )
+        return items
 
     def _customer_dict(self, customer_id: str | None) -> dict[str, Any] | None:
         cid = self._safe_int(customer_id)
@@ -337,6 +355,7 @@ class BlueFolderService:
             "site_name": (location or {}).get("name"),
             "site_notes": (location or {}).get("notes"),
             "address": address,
+            "equipment": self._equipment_from_sr(sr),
         }
 
     def get_service_request_notes(self, sr_id: int, limit: int = 5) -> list[dict[str, Any]]:
@@ -360,6 +379,88 @@ class BlueFolderService:
         notes = [note for note in notes if note.get("text")]
         notes = sorted(notes, key=lambda item: item.get("dateCreated") or "", reverse=True)
         return notes[:limit]
+
+    def get_service_request_history(self, sr_id: int, limit: int = 12) -> list[dict[str, Any]]:
+        """Return a broader history feed than `/notes`."""
+        return self.get_service_request_notes(sr_id, limit=limit)
+
+    def get_service_request_attachments(self, sr_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        try:
+            rows = self.client.attachments.list_for_service_request(sr_id)
+        except Exception:
+            return []
+        rows = sorted(
+            rows,
+            key=lambda item: item.get("postedOn") or item.get("dateCreated") or "",
+            reverse=True,
+        )
+        return rows[:limit]
+
+    def get_service_request_equipment(self, sr_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        item = self.get_service_request(sr_id)
+        if item.get("equipment"):
+            return item["equipment"][:limit]
+        customer_id = self._safe_int(item.get("customer_id"))
+        if not customer_id:
+            return []
+        try:
+            rows = self.client.equipment.list_for_customer(customer_id)
+        except Exception:
+            return []
+
+        location_id = str(item.get("location_id") or "")
+        if location_id:
+            filtered = [row for row in rows if str(row.get("locationId") or "") == location_id]
+            if filtered:
+                rows = filtered
+        return rows[:limit]
+
+    def search_recent_service_requests(
+        self,
+        query: str,
+        *,
+        field: str,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        cleaned = self._clean_text(query)
+        if not cleaned:
+            return []
+
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=max(settings.search_lookback_days, 1))
+        try:
+            rows = self.client.service_requests.list_for_range(
+                start_date.strftime("%Y.%m.%d 12:00 AM"),
+                end_date.strftime("%Y.%m.%d 11:59 PM"),
+            )
+        except Exception:
+            return []
+
+        needle = cleaned.casefold()
+        matches: list[dict[str, Any]] = []
+        for row in rows:
+            haystacks: list[str] = []
+            if field == "customer":
+                haystacks = [row.get("subject") or ""]
+            elif field == "address":
+                haystacks = [
+                    row.get("address") or "",
+                    row.get("city") or "",
+                    row.get("state") or "",
+                    row.get("zip") or "",
+                ]
+            if any(needle in str(value).casefold() for value in haystacks):
+                address_bits = [row.get("address"), row.get("city"), row.get("state"), row.get("zip")]
+                matches.append(
+                    {
+                        "id": row.get("id"),
+                        "subject": row.get("subject") or "Service Request",
+                        "address": ", ".join(bit for bit in address_bits if bit),
+                        "start": row.get("start"),
+                        "end": row.get("end"),
+                    }
+                )
+        return matches[:limit]
 
     def add_service_request_note(
         self,
