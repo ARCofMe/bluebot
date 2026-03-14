@@ -204,6 +204,86 @@ class BlueFolderService:
             )
         return items
 
+    @staticmethod
+    def _first_text(node: Any, tags: tuple[str, ...]) -> str | None:
+        for tag in tags:
+            value = node.findtext(tag)
+            if value not in (None, ""):
+                return value
+        return None
+
+    @classmethod
+    def _materials_from_sr(cls, sr: Any) -> list[dict[str, Any]]:
+        """Parse embedded material rows from a service request payload."""
+        paths = (
+            ".//materials/material",
+            ".//materials/materialItem",
+            ".//materialsToService/material",
+            ".//materialsToService/materialItem",
+            ".//serviceRequestMaterials/material",
+            ".//serviceRequestMaterials/materialItem",
+        )
+        items: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str | None, str | None, str | None]] = set()
+        for path in paths:
+            for node in sr.findall(path):
+                row = {
+                    "id": cls._first_text(node, ("id", "materialId")),
+                    "itemName": cls._first_text(
+                        node,
+                        ("itemName", "itemDescription", "description", "name"),
+                    ),
+                    "description": cls._first_text(
+                        node,
+                        ("description", "itemDescription", "comment"),
+                    ),
+                    "quantity": cls._first_text(node, ("quantity", "itemQuantity", "qty")),
+                    "unitPrice": cls._first_text(node, ("unitPrice", "price", "rate")),
+                    "total": cls._first_text(node, ("total", "lineTotal", "amount")),
+                    "isBillable": cls._first_text(node, ("isBillable", "billable")),
+                }
+                key = (row["id"], row["itemName"], row["quantity"])
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                items.append(row)
+        return items
+
+    @classmethod
+    def _labor_from_sr(cls, sr: Any) -> list[dict[str, Any]]:
+        """Parse embedded labor rows from a service request payload."""
+        paths = (
+            ".//labor/labor",
+            ".//labor/laborItem",
+            ".//laborToService/labor",
+            ".//laborToService/laborItem",
+            ".//serviceRequestLabor/labor",
+            ".//serviceRequestLabor/laborItem",
+        )
+        items: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str | None, str | None, str | None]] = set()
+        for path in paths:
+            for node in sr.findall(path):
+                row = {
+                    "id": cls._first_text(node, ("id", "laborId")),
+                    "userId": cls._first_text(node, ("userId",)),
+                    "date": cls._first_text(node, ("dateWorked", "date", "entryDate")),
+                    "hours": cls._first_text(node, ("hoursWorked", "hours", "duration")),
+                    "rate": cls._first_text(node, ("hourlyRate", "rate")),
+                    "total": cls._first_text(node, ("total", "lineTotal", "amount")),
+                    "isBillable": cls._first_text(node, ("isBillable", "billable")),
+                    "description": cls._first_text(
+                        node,
+                        ("description", "comment", "itemDescription"),
+                    ),
+                }
+                key = (row["id"], row["date"], row["hours"])
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                items.append(row)
+        return items
+
     def _customer_dict(self, customer_id: str | None) -> dict[str, Any] | None:
         cid = self._safe_int(customer_id)
         if not cid:
@@ -556,6 +636,13 @@ class BlueFolderService:
             "equipment": self._equipment_from_sr(sr),
         }
 
+    def _get_service_request_xml(self, sr_id: int) -> Any | None:
+        try:
+            sr_xml = self.client.service_requests.get_by_id(sr_id)
+        except Exception:
+            return None
+        return sr_xml.find(".//serviceRequest")
+
     def get_service_request_notes(self, sr_id: int, limit: int = 5) -> list[dict[str, Any]]:
         try:
             hist_xml = self.client.service_requests.get_history(sr_id)
@@ -614,17 +701,17 @@ class BlueFolderService:
         return rows[:limit]
 
     def get_service_request_materials(self, sr_id: int, limit: int = 10) -> list[dict[str, Any]]:
-        try:
-            rows = self.client.materials.list_for_service_request(sr_id)
-        except Exception:
+        sr = self._get_service_request_xml(sr_id)
+        if sr is None:
             return []
+        rows = self._materials_from_sr(sr)
         return rows[:limit]
 
     def get_service_request_labor(self, sr_id: int, limit: int = 10) -> list[dict[str, Any]]:
-        try:
-            rows = self.client.labor.list_for_service_request(sr_id)
-        except Exception:
+        sr = self._get_service_request_xml(sr_id)
+        if sr is None:
             return []
+        rows = self._labor_from_sr(sr)
         rows = sorted(rows, key=lambda item: item.get("date") or "", reverse=True)
         return rows[:limit]
 

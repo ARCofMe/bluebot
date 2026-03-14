@@ -71,13 +71,20 @@ Important variables:
 - `/bf_status` shows BlueFolder connectivity/config status.
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 
+Materials and labor are read from the `serviceRequests/get` payload for the SR. On this tenant, standalone `materials/list` and `labor/list` endpoints are not reliable.
+
 ## Roadmap
 
 ### Phase 2
 
-- Add `/equipment`, `/attachments`, and `/history` so techs can inspect assets and prior work in the field.
-- Add `/customer_search`, `/phone_search`, and `/address_search` for partial-lookup workflows.
-- Add role-aware command gating so dispatcher/admin commands are separated from tech-only commands.
+Completed:
+- `/equipment`, `/attachments`, `/history`, `/materials`, and `/labor`
+- `/search_customer`
+- `/user`, `/customer_lookup`, and `/bf_status`
+- dispatcher support commands like `/tech_loads`, `/tech_day`, and `/who_has_sr`
+
+Tenant limitation:
+- `/search_address` remains limited because this BlueFolder tenant does not expose a workable global address-search endpoint.
 
 ### Phase 3
 
