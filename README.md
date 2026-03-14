@@ -62,6 +62,9 @@ Important variables:
 - `/labor sr_id:<id>` lists recorded labor for the service request.
 - `/search_customer text:<text>` searches the BlueFolder customer directory.
 - `/search_address text:<text>` is currently limited by available BlueFolder endpoints on this tenant.
+- `/user user_id:<id>` looks up a BlueFolder user.
+- `/customer_lookup customer_id:<id>` looks up a BlueFolder customer.
+- `/bf_status` shows BlueFolder connectivity/config status.
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 
 ## Roadmap

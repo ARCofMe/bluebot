@@ -201,6 +201,66 @@ class BlueFolderService:
         ]
         return sorted(results, key=lambda item: item["name"].casefold())
 
+    def get_user(self, user_id: int) -> dict[str, Any]:
+        try:
+            user = self.client.users.get_by_id(user_id)
+        except Exception as exc:
+            return {"id": str(user_id), "error": str(exc)}
+        if not user:
+            return {}
+        return {
+            "id": user.get("id") or str(user_id),
+            "name": " ".join(
+                part for part in [user.get("firstName"), user.get("lastName")] if part
+            ).strip()
+            or "Unknown",
+            "email": user.get("email"),
+            "user_type": user.get("userType"),
+            "is_active": user.get("isActive"),
+        }
+
+    def get_customer_summary(self, customer_id: int) -> dict[str, Any]:
+        try:
+            xml = self.client.customers.list()
+        except Exception as exc:
+            return {"id": str(customer_id), "error": str(exc)}
+
+        needle = str(customer_id)
+        customer = None
+        for node in xml.findall(".//customer"):
+            if (node.findtext("customerId") or "") == needle:
+                customer = node
+                break
+        if customer is None:
+            return {}
+
+        return {
+            "id": customer.findtext("customerId") or needle,
+            "name": customer.findtext("customerName") or "Customer",
+            "type": customer.findtext("customerType"),
+            "inactive": customer.findtext("inactive") == "1",
+        }
+
+    def bluefolder_status(self) -> dict[str, Any]:
+        """Small connectivity/config status report for admin troubleshooting."""
+        try:
+            techs = self.list_active_techs()
+            return {
+                "ok": True,
+                "base_url": settings.bluefolder_base_url,
+                "host_header": settings.bluefolder_host_header,
+                "verify_ssl": settings.bluefolder_verify_ssl,
+                "active_tech_count": len(techs),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "base_url": settings.bluefolder_base_url,
+                "host_header": settings.bluefolder_host_header,
+                "verify_ssl": settings.bluefolder_verify_ssl,
+                "error": str(exc),
+            }
+
     def resolve_tech_id(self, discord_user_id: int, candidate_names: list[str] | None = None) -> int | None:
         mapped = settings.parsed_discord_tech_map.get(str(discord_user_id))
         if mapped:

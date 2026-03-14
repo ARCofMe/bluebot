@@ -75,6 +75,9 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/labor sr_id - labor recorded against the service request",
         "/search_customer text - search the BlueFolder customer directory",
         "/search_address text - address search is limited on this BlueFolder tenant",
+        "/user user_id - BlueFolder user lookup",
+        "/customer_lookup customer_id - BlueFolder customer lookup",
+        "/bf_status - BlueFolder connectivity/config status",
         "/waiver sr_id - generate the prefilled waiver link",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -429,6 +432,72 @@ async def search_address(interaction: discord.Interaction, text: str) -> None:
         if row.get("address"):
             bits.append(row["address"])
         lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="user", description="Look up a BlueFolder user.")
+@app_commands.describe(user_id="BlueFolder user ID")
+async def user(interaction: discord.Interaction, user_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    item = bot.bluefolder.get_user(user_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for user `{user_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
+    if not item:
+        await interaction.followup.send(f"User `{user_id}` not found.", ephemeral=True)
+        return
+
+    lines = [
+        f"User {item['id']}",
+        f"Name: {item.get('name') or 'n/a'}",
+        f"Email: {item.get('email') or 'n/a'}",
+        f"Type: {item.get('user_type') or 'n/a'}",
+        f"Active: {item.get('is_active')}",
+    ]
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="customer_lookup", description="Look up a BlueFolder customer.")
+@app_commands.describe(customer_id="BlueFolder customer ID")
+async def customer_lookup(interaction: discord.Interaction, customer_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    item = bot.bluefolder.get_customer_summary(customer_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for customer `{customer_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
+    if not item:
+        await interaction.followup.send(f"Customer `{customer_id}` not found.", ephemeral=True)
+        return
+
+    lines = [
+        f"Customer {item['id']}",
+        f"Name: {item.get('name') or 'n/a'}",
+        f"Type: {item.get('type') or 'n/a'}",
+        f"Inactive: {item.get('inactive')}",
+    ]
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="bf_status", description="Show BlueFolder connectivity/config status.")
+async def bf_status(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    status = bot.bluefolder.bluefolder_status()
+    lines = [
+        f"OK: {status.get('ok')}",
+        f"Base URL: {status.get('base_url') or 'n/a'}",
+        f"Host Header: {status.get('host_header') or 'n/a'}",
+        f"Verify SSL: {status.get('verify_ssl')}",
+    ]
+    if status.get("ok"):
+        lines.append(f"Active Techs: {status.get('active_tech_count')}")
+    else:
+        lines.append(f"Error: {status.get('error') or 'unknown'}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
