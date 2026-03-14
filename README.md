@@ -64,6 +64,8 @@ Important variables:
 - `/search_address text:<text>` is currently limited by available BlueFolder endpoints on this tenant.
 - `/user user_id:<id>` looks up a BlueFolder user.
 - `/customer_lookup customer_id:<id>` looks up a BlueFolder customer.
+- `/tech_loads` shows today's assignment counts by technician.
+- `/who_has_sr sr_id:<id>` finds who has a service request assigned today.
 - `/bf_status` shows BlueFolder connectivity/config status.
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 

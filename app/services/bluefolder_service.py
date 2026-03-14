@@ -207,6 +207,22 @@ class BlueFolderService:
         except Exception as exc:
             return {"id": str(user_id), "error": str(exc)}
         if not user:
+            try:
+                users = self.client.users.list_all()
+            except Exception:
+                return {}
+            for row in users:
+                if str(row.get("id") or "") == str(user_id):
+                    user = {
+                        "id": row.get("id"),
+                        "firstName": row.get("firstName"),
+                        "lastName": row.get("lastName"),
+                        "email": row.get("email"),
+                        "userType": row.get("userType"),
+                        "isActive": not bool(row.get("inactive")),
+                    }
+                    break
+        if not user:
             return {}
         return {
             "id": user.get("id") or str(user_id),
@@ -305,6 +321,48 @@ class BlueFolderService:
                 }
             )
         return sorted(results, key=lambda item: item.get("start") or "")
+
+    def get_dispatch_loads_today(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Summarize today's assignment counts for active techs."""
+        loads: list[dict[str, Any]] = []
+        for tech in self.list_active_techs():
+            try:
+                assignments = self.get_assignments_for_user_today(tech["id"])
+            except Exception:
+                assignments = []
+            loads.append(
+                {
+                    "tech_id": tech["id"],
+                    "tech_name": tech["name"],
+                    "assignment_count": len(assignments),
+                    "first_start": assignments[0].get("start_display") if assignments else None,
+                }
+            )
+        loads.sort(key=lambda item: (-item["assignment_count"], item["tech_name"].casefold()))
+        return loads[:limit]
+
+    def find_sr_assignment_today(self, sr_id: int) -> list[dict[str, Any]]:
+        """Find which active techs are assigned to a given SR today."""
+        matches: list[dict[str, Any]] = []
+        target = str(sr_id)
+        for tech in self.list_active_techs():
+            try:
+                assignments = self.get_assignments_for_user_today(tech["id"])
+            except Exception:
+                continue
+            for assignment in assignments:
+                if str(assignment.get("service_request_id") or "") != target:
+                    continue
+                matches.append(
+                    {
+                        "tech_id": tech["id"],
+                        "tech_name": tech["name"],
+                        "start": assignment.get("start_display") or assignment.get("start"),
+                        "end": assignment.get("end_display") or assignment.get("end"),
+                        "subject": assignment.get("subject"),
+                    }
+                )
+        return matches
 
     def get_customer_contacts(
         self, customer_id: str | None, location_id: str | None = None

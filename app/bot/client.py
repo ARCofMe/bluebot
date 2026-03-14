@@ -77,6 +77,8 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/search_address text - address search is limited on this BlueFolder tenant",
         "/user user_id - BlueFolder user lookup",
         "/customer_lookup customer_id - BlueFolder customer lookup",
+        "/tech_loads - today's assignment counts by tech",
+        "/who_has_sr sr_id - find who has a service request today",
         "/bf_status - BlueFolder connectivity/config status",
         "/waiver sr_id - generate the prefilled waiver link",
     ]
@@ -498,6 +500,48 @@ async def bf_status(interaction: discord.Interaction) -> None:
         lines.append(f"Active Techs: {status.get('active_tech_count')}")
     else:
         lines.append(f"Error: {status.get('error') or 'unknown'}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="tech_loads", description="Show today's assignment counts by technician.")
+async def tech_loads(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.get_dispatch_loads_today(limit=15)
+    if not rows:
+        await interaction.followup.send("No technician load data available.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [
+            row["tech_name"],
+            f"jobs={row['assignment_count']}",
+        ]
+        if row.get("first_start"):
+            bits.append(f"first={row['first_start']}")
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="who_has_sr", description="Find who has a service request today.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def who_has_sr(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.find_sr_assignment_today(sr_id)
+    if not rows:
+        await interaction.followup.send(f"No active-tech assignment found today for `{sr_id}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [row["tech_name"]]
+        if row.get("start"):
+            bits.append(f"start={row['start']}")
+        if row.get("end"):
+            bits.append(f"end={row['end']}")
+        if row.get("subject"):
+            bits.append(row["subject"])
+        lines.append(f"{idx}. {' | '.join(bits)}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
