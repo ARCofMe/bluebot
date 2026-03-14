@@ -34,6 +34,8 @@ Important variables:
 - `BLUEFOLDER_API_PATH` (optional override; otherwise the bot looks for a sibling `../bluefolder-api` repo)
 - `BLUEFOLDER_COMMENT_USER_ID` fallback BlueFolder user ID for `note_add` when the Discord user is not mapped in `DISCORD_TECH_MAP`
 - `ASSIGNMENT_CACHE_TTL_SECONDS` to cache per-tech assignment windows and reduce repeated BlueFolder calls
+- `WORKFLOW_WRITE_ASSIGNMENT` to control whether `/eta`, `/enroute`, `/start`, and `/complete` write to assignment records
+- `WORKFLOW_WRITE_SR_NOTE` to control whether those workflow commands also append internal service request notes
 - `WAIVER_BASE_URL` to enable `/waiver`
 - `WAIVER_SR_PARAM`, `WAIVER_NAME_PARAM`, `WAIVER_FIRST_NAME_PARAM`, and `WAIVER_LAST_NAME_PARAM` to control the waiver query-string keys
 
@@ -56,6 +58,10 @@ Important variables:
 - `/site sr_id:<id>` shows the site address and site notes.
 - `/notes sr_id:<id>` shows the most recent service request comments.
 - `/history sr_id:<id>` shows a broader service request history feed.
+- `/eta sr_id:<id> minutes:<n>` records an ETA update for your assigned job.
+- `/enroute sr_id:<id>` records an en-route update for your assigned job.
+- `/start sr_id:<id>` records that work has started on your assigned job.
+- `/complete sr_id:<id>` completes your assigned assignment in BlueFolder.
 - `/note_add sr_id:<id> text:<text>` adds an internal service request note.
 - `/attachments sr_id:<id>` lists recent service request attachments.
 - `/equipment sr_id:<id>` lists equipment for the customer/site.
@@ -72,6 +78,21 @@ Important variables:
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 
 Materials and labor are read from the `serviceRequests/get` payload for the SR. On this tenant, standalone `materials/list` and `labor/list` endpoints are not reliable.
+
+## Workflow Data Model
+
+BlueBot does not keep its own database for technician workflow state.
+
+- ETA, en route, and start updates are written to BlueFolder in two places:
+  - the assignment comment for the mapped technician's assignment
+  - an internal service request note
+- Complete uses BlueFolder's assignment completion endpoint and also writes an internal service request note.
+- The write targets are configuration-driven:
+  - `WORKFLOW_WRITE_ASSIGNMENT=true`
+  - `WORKFLOW_WRITE_SR_NOTE=true`
+- The bot's in-memory assignment cache is only a short-lived read cache to reduce repeated BlueFolder calls. It is cleared after workflow writes so the next lookup reflects current BlueFolder state.
+
+This means BlueFolder remains the system of record for ETA, start time, and completion history.
 
 ## Roadmap
 

@@ -77,6 +77,10 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/site sr_id - site address and site notes",
         "/notes sr_id - recent service request notes",
         "/history sr_id - broader service request history",
+        "/eta sr_id minutes - update ETA on your assigned job",
+        "/enroute sr_id - mark yourself en route on your assigned job",
+        "/start sr_id - mark yourself started on your assigned job",
+        "/complete sr_id - complete your assigned job",
         "/note_add sr_id text - add an internal service request note",
         "/attachments sr_id - recent service request attachments",
         "/equipment sr_id - customer equipment for the job site",
@@ -319,6 +323,121 @@ async def note_add(interaction: discord.Interaction, sr_id: int, text: str) -> N
         )
         return
     await interaction.followup.send(f"Added note to service request `{sr_id}`.", ephemeral=True)
+
+
+@bot.tree.command(name="eta", description="Record an ETA update for your assigned service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID", minutes="Minutes until arrival")
+async def eta(interaction: discord.Interaction, sr_id: int, minutes: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+    if minutes < 0:
+        await interaction.followup.send("ETA minutes must be zero or greater.", ephemeral=True)
+        return
+
+    result = bot.bluefolder.mark_eta(sr_id, user_id=tech_id, minutes=minutes)
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not update ETA for `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        "\n".join(
+            [
+                f"Updated ETA for service request `{sr_id}`.",
+                f"Stored as: {result.get('stored_as')}",
+                f"ETA: {result.get('eta_minutes')} minutes",
+            ]
+        ),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="enroute", description="Mark yourself en route for your assigned service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def enroute(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+
+    result = bot.bluefolder.mark_enroute(sr_id, user_id=tech_id)
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not mark `{sr_id}` en route: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        "\n".join(
+            [
+                f"Marked service request `{sr_id}` en route.",
+                f"Stored as: {result.get('stored_as')}",
+                f"Time: {result.get('timestamp')}",
+            ]
+        ),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="start", description="Mark yourself started on your assigned service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def start(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+
+    result = bot.bluefolder.mark_start(sr_id, user_id=tech_id)
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not mark `{sr_id}` started: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        "\n".join(
+            [
+                f"Marked service request `{sr_id}` started.",
+                f"Stored as: {result.get('stored_as')}",
+                f"Started: {result.get('started_at')}",
+            ]
+        ),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="complete", description="Complete your assigned service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def complete(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+
+    result = bot.bluefolder.mark_complete(sr_id, user_id=tech_id)
+    if not result.get("ok"):
+        await interaction.followup.send(
+            f"Could not complete `{sr_id}`: {result.get('error') or 'unknown error'}",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        "\n".join(
+            [
+                f"Completed assignment for service request `{sr_id}`.",
+                f"Stored as: {result.get('stored_as')}",
+                f"Completed: {result.get('completed_at')}",
+            ]
+        ),
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="attachments", description="List recent attachments for a service request.")

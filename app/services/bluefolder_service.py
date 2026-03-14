@@ -94,6 +94,9 @@ class BlueFolderService:
             return
         self._assignment_cache[key] = (time.monotonic(), value)
 
+    def _clear_assignment_cache(self) -> None:
+        self._assignment_cache.clear()
+
     @staticmethod
     def _clean_text(value: str | None) -> str | None:
         if value is None:
@@ -478,6 +481,13 @@ class BlueFolderService:
             )
         return sorted(results, key=lambda item: item.get("start") or "")
 
+    def get_assignment_for_sr_today(self, user_id: int, sr_id: int) -> dict[str, Any] | None:
+        target = str(sr_id)
+        for assignment in self.get_assignments_for_user_today(user_id):
+            if str(assignment.get("service_request_id") or "") == target:
+                return assignment
+        return None
+
     def get_dispatch_loads_for_day(self, day: date, limit: int = 10) -> list[dict[str, Any]]:
         """Summarize assignment counts for active techs on a given day."""
         loads: list[dict[str, Any]] = []
@@ -782,6 +792,173 @@ class BlueFolderService:
             return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _bluefolder_ok(self, response: Any) -> dict[str, Any]:
+        if response is None:
+            return {"ok": False, "error": "Empty BlueFolder response."}
+        if getattr(response, "attrib", {}).get("status") == "fail":
+            error = response.findtext(".//error") or "BlueFolder rejected the request."
+            return {"ok": False, "error": error}
+        return {"ok": True}
+
+    def _update_assignment_comment(self, assignment_id: int, comment: str) -> dict[str, Any]:
+        try:
+            response = self.client.service_requests.edit_assignment(
+                assignment_id,
+                assignmentComment=comment,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        result = self._bluefolder_ok(response)
+        if result.get("ok"):
+            self._clear_assignment_cache()
+        return result
+
+    def _complete_assignment(self, assignment_id: int, comment: str | None = None) -> dict[str, Any]:
+        try:
+            response = self.client.service_requests.complete_assignment(
+                assignment_id,
+                comment=comment,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        result = self._bluefolder_ok(response)
+        if result.get("ok"):
+            self._clear_assignment_cache()
+        return result
+
+    def _workflow_targets(self) -> list[str]:
+        targets: list[str] = []
+        if settings.workflow_write_assignment:
+            targets.append("assignment")
+        if settings.workflow_write_sr_note:
+            targets.append("sr_note")
+        return targets
+
+    def _write_workflow_update(
+        self,
+        sr_id: int,
+        *,
+        user_id: int,
+        assignment_id: int,
+        text: str,
+        complete_assignment: bool = False,
+    ) -> dict[str, Any]:
+        targets = self._workflow_targets()
+        if not targets:
+            return {"ok": False, "error": "Workflow writes are disabled by configuration."}
+
+        if settings.workflow_write_assignment:
+            if complete_assignment:
+                result = self._complete_assignment(assignment_id, comment=text)
+            else:
+                result = self._update_assignment_comment(assignment_id, text)
+            if not result.get("ok"):
+                return result
+
+        if settings.workflow_write_sr_note:
+            result = self.add_service_request_note(
+                sr_id,
+                text,
+                user_id=user_id,
+                visible_to_customer=False,
+            )
+            if not result.get("ok"):
+                return result
+
+        return {"ok": True, "stored_as": " + ".join(targets)}
+
+    def mark_eta(
+        self,
+        sr_id: int,
+        *,
+        user_id: int,
+        minutes: int,
+    ) -> dict[str, Any]:
+        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        if not assignment:
+            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+        eta_at = datetime.now().replace(second=0, microsecond=0)
+        eta_msg = f"ETA update: arriving in {minutes} minutes."
+        write_result = self._write_workflow_update(
+            sr_id,
+            user_id=user_id,
+            assignment_id=int(assignment["assignment_id"]),
+            text=eta_msg,
+        )
+        if not write_result.get("ok"):
+            return write_result
+        return {
+            "ok": True,
+            "assignment_id": assignment["assignment_id"],
+            "stored_as": write_result.get("stored_as"),
+            "eta_minutes": minutes,
+            "recorded_at": eta_at.isoformat(timespec="minutes"),
+        }
+
+    def mark_enroute(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
+        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        if not assignment:
+            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+        now = datetime.now().replace(second=0, microsecond=0)
+        text = f"Technician en route at {now.strftime('%I:%M %p').lstrip('0')}."
+        write_result = self._write_workflow_update(
+            sr_id,
+            user_id=user_id,
+            assignment_id=int(assignment["assignment_id"]),
+            text=text,
+        )
+        if not write_result.get("ok"):
+            return write_result
+        return {
+            "ok": True,
+            "assignment_id": assignment["assignment_id"],
+            "stored_as": write_result.get("stored_as"),
+            "timestamp": now.isoformat(timespec="minutes"),
+        }
+
+    def mark_start(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
+        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        if not assignment:
+            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+        now = datetime.now().replace(second=0, microsecond=0)
+        text = f"Technician started work at {now.strftime('%I:%M %p').lstrip('0')}."
+        write_result = self._write_workflow_update(
+            sr_id,
+            user_id=user_id,
+            assignment_id=int(assignment["assignment_id"]),
+            text=text,
+        )
+        if not write_result.get("ok"):
+            return write_result
+        return {
+            "ok": True,
+            "assignment_id": assignment["assignment_id"],
+            "stored_as": write_result.get("stored_as"),
+            "started_at": now.isoformat(timespec="minutes"),
+        }
+
+    def mark_complete(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
+        assignment = self.get_assignment_for_sr_today(user_id, sr_id)
+        if not assignment:
+            return {"ok": False, "error": "No assignment for this SR is mapped to you today."}
+        now = datetime.now().replace(second=0, microsecond=0)
+        text = f"Technician marked assignment complete at {now.strftime('%I:%M %p').lstrip('0')}."
+        write_result = self._write_workflow_update(
+            sr_id,
+            user_id=user_id,
+            assignment_id=int(assignment["assignment_id"]),
+            text=text,
+            complete_assignment=True,
+        )
+        if not write_result.get("ok"):
+            return write_result
+        return {
+            "ok": True,
+            "assignment_id": assignment["assignment_id"],
+            "stored_as": write_result.get("stored_as"),
+            "completed_at": now.isoformat(timespec="minutes"),
+        }
 
     def build_waiver_link(self, sr_id: int) -> dict[str, Any]:
         item = self.get_service_request(sr_id)

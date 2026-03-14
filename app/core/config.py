@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     bluefolder_timeout_seconds: float | None = None
     bluefolder_comment_user_id: int | None = None
     assignment_cache_ttl_seconds: int = 120
+    workflow_write_assignment: bool = True
+    workflow_write_sr_note: bool = True
 
     waiver_base_url: str | None = None
     waiver_sr_param: str = "sr"
