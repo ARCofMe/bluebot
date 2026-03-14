@@ -33,7 +33,6 @@ Important variables:
 - `BLUEFOLDER_BASE_URL` / `BLUEFOLDER_HOST_HEADER` when your working setup uses an IP-based BlueFolder endpoint
 - `BLUEFOLDER_API_PATH` (optional override; otherwise the bot looks for a sibling `../bluefolder-api` repo)
 - `BLUEFOLDER_COMMENT_USER_ID` fallback BlueFolder user ID for `note_add` when the Discord user is not mapped in `DISCORD_TECH_MAP`
-- `SEARCH_LOOKBACK_DAYS` to control how far back the recent SR search commands scan
 - `WAIVER_BASE_URL` to enable `/waiver`
 - `WAIVER_SR_PARAM`, `WAIVER_NAME_PARAM`, `WAIVER_FIRST_NAME_PARAM`, and `WAIVER_LAST_NAME_PARAM` to control the waiver query-string keys
 
@@ -59,8 +58,10 @@ Important variables:
 - `/note_add sr_id:<id> text:<text>` adds an internal service request note.
 - `/attachments sr_id:<id>` lists recent service request attachments.
 - `/equipment sr_id:<id>` lists equipment for the customer/site.
-- `/search_customer text:<text>` searches recent service requests by customer/subject text.
-- `/search_address text:<text>` searches recent service requests by address/city/state/zip.
+- `/materials sr_id:<id>` lists recorded materials for the service request.
+- `/labor sr_id:<id>` lists recorded labor for the service request.
+- `/search_customer text:<text>` searches the BlueFolder customer directory.
+- `/search_address text:<text>` is currently limited by available BlueFolder endpoints on this tenant.
 - `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
 
 ## Roadmap

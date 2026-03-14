@@ -6,7 +6,7 @@ import html
 import os
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -415,6 +415,21 @@ class BlueFolderService:
                 rows = filtered
         return rows[:limit]
 
+    def get_service_request_materials(self, sr_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        try:
+            rows = self.client.materials.list_for_service_request(sr_id)
+        except Exception:
+            return []
+        return rows[:limit]
+
+    def get_service_request_labor(self, sr_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        try:
+            rows = self.client.labor.list_for_service_request(sr_id)
+        except Exception:
+            return []
+        rows = sorted(rows, key=lambda item: item.get("date") or "", reverse=True)
+        return rows[:limit]
+
     def search_recent_service_requests(
         self,
         query: str,
@@ -426,41 +441,31 @@ class BlueFolderService:
         if not cleaned:
             return []
 
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=max(settings.search_lookback_days, 1))
-        try:
-            rows = self.client.service_requests.list_for_range(
-                start_date.strftime("%Y.%m.%d 12:00 AM"),
-                end_date.strftime("%Y.%m.%d 11:59 PM"),
-            )
-        except Exception:
-            return []
-
-        needle = cleaned.casefold()
-        matches: list[dict[str, Any]] = []
-        for row in rows:
-            haystacks: list[str] = []
-            if field == "customer":
-                haystacks = [row.get("subject") or ""]
-            elif field == "address":
-                haystacks = [
-                    row.get("address") or "",
-                    row.get("city") or "",
-                    row.get("state") or "",
-                    row.get("zip") or "",
-                ]
-            if any(needle in str(value).casefold() for value in haystacks):
-                address_bits = [row.get("address"), row.get("city"), row.get("state"), row.get("zip")]
+        if field == "customer":
+            try:
+                xml = self.client.customers.list()
+            except Exception:
+                return []
+            needle = cleaned.casefold()
+            matches: list[dict[str, Any]] = []
+            for customer in xml.findall(".//customer"):
+                name = customer.findtext("customerName") or ""
+                if needle not in name.casefold():
+                    continue
                 matches.append(
                     {
-                        "id": row.get("id"),
-                        "subject": row.get("subject") or "Service Request",
-                        "address": ", ".join(bit for bit in address_bits if bit),
-                        "start": row.get("start"),
-                        "end": row.get("end"),
+                        "id": customer.findtext("customerId"),
+                        "subject": name,
+                        "address": "",
+                        "start": None,
+                        "end": None,
                     }
                 )
-        return matches[:limit]
+            matches.sort(key=lambda item: (item.get("subject") or "").casefold())
+            return matches[:limit]
+
+        # BlueFolder does not expose a workable global location search on this tenant.
+        return []
 
     def add_service_request_note(
         self,

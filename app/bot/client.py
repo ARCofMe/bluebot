@@ -71,8 +71,10 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/note_add sr_id text - add an internal service request note",
         "/attachments sr_id - recent service request attachments",
         "/equipment sr_id - customer equipment for the job site",
-        "/search_customer text - search recent service requests by customer/subject",
-        "/search_address text - search recent service requests by address/city/state",
+        "/materials sr_id - materials recorded against the service request",
+        "/labor sr_id - labor recorded against the service request",
+        "/search_customer text - search the BlueFolder customer directory",
+        "/search_address text - address search is limited on this BlueFolder tenant",
         "/waiver sr_id - generate the prefilled waiver link",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -341,35 +343,84 @@ async def equipment(interaction: discord.Interaction, sr_id: int) -> None:
             bits.append(f"serial={row['serialNumber']}")
         if row.get("installDate"):
             bits.append(f"installed={row['installDate']}")
+        if row.get("manufacturer"):
+            bits.append(f"mfr={row['manufacturer']}")
         lines.append(f"{idx}. {' | '.join(bits)}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
-@bot.tree.command(name="search_customer", description="Search recent service requests by customer/subject.")
+@bot.tree.command(name="materials", description="List materials recorded against a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def materials(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.get_service_request_materials(sr_id)
+    if not rows:
+        await interaction.followup.send(f"No materials found for `{sr_id}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [row.get("itemName") or row.get("description") or "Material"]
+        if row.get("quantity"):
+            bits.append(f"qty={row['quantity']}")
+        if row.get("unitPrice"):
+            bits.append(f"unit={row['unitPrice']}")
+        if row.get("total"):
+            bits.append(f"total={row['total']}")
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="labor", description="List labor recorded against a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def labor(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.get_service_request_labor(sr_id)
+    if not rows:
+        await interaction.followup.send(f"No labor found for `{sr_id}`.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [row.get("date") or "unknown date"]
+        if row.get("hours"):
+            bits.append(f"hours={row['hours']}")
+        if row.get("rate"):
+            bits.append(f"rate={row['rate']}")
+        if row.get("total"):
+            bits.append(f"total={row['total']}")
+        if row.get("description"):
+            bits.append(row["description"])
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="search_customer", description="Search the BlueFolder customer directory.")
 @app_commands.describe(text="Customer or subject text")
 async def search_customer(interaction: discord.Interaction, text: str) -> None:
     await interaction.response.defer(ephemeral=True)
     rows = bot.bluefolder.search_recent_service_requests(text, field="customer")
     if not rows:
-        await interaction.followup.send(f"No recent service requests matched `{text}`.", ephemeral=True)
+        await interaction.followup.send(f"No customers matched `{text}`.", ephemeral=True)
         return
 
     lines = []
     for idx, row in enumerate(rows, start=1):
-        bits = [f"SR {row.get('id')}", row.get("subject") or "Service Request"]
-        if row.get("address"):
-            bits.append(row["address"])
+        bits = [f"Customer {row.get('id')}", row.get("subject") or "Customer"]
         lines.append(f"{idx}. {' | '.join(bits)}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
-@bot.tree.command(name="search_address", description="Search recent service requests by address or city.")
+@bot.tree.command(name="search_address", description="Address search is limited on this BlueFolder tenant.")
 @app_commands.describe(text="Address, city, state, or zip text")
 async def search_address(interaction: discord.Interaction, text: str) -> None:
     await interaction.response.defer(ephemeral=True)
     rows = bot.bluefolder.search_recent_service_requests(text, field="address")
     if not rows:
-        await interaction.followup.send(f"No recent service requests matched `{text}`.", ephemeral=True)
+        await interaction.followup.send(
+            "Address search is not fully supported by the BlueFolder endpoints available on this tenant yet.",
+            ephemeral=True,
+        )
         return
 
     lines = []
