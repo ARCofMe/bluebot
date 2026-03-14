@@ -70,6 +70,12 @@ async def assignments_today(interaction: discord.Interaction, tech_id: int) -> N
 async def sr(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
     item = bot.bluefolder.get_service_request(sr_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
     if not item:
         await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
         return

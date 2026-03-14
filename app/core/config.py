@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     app_name: str = "BlueBot Discord"
     environment: str = "dev"
-    debug: bool = True
+    debug: str | bool = True
 
     discord_bot_token: str
     discord_guild_id: int | None = None
@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     bluefolder_api_key: str | None = None
     bluefolder_account_name: str | None = None
     bluefolder_api_path: str | None = None
+    bluefolder_base_url: str | None = None
+    bluefolder_host_header: str | None = None
+    bluefolder_verify_ssl: bool | None = None
+    bluefolder_timeout_seconds: float | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

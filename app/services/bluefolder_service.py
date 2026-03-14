@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import os
 import sys
-import xml.etree.ElementTree as ET
-from datetime import date
+from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
 
 
 def _maybe_extend_sys_path() -> None:
-    candidate = settings.bluefolder_api_path or "/home/ner0tic/Documents/Projects/ARCoM/bluefolder-api"
-    if candidate and candidate not in sys.path:
-        sys.path.append(candidate)
+    candidate = settings.bluefolder_api_path
+    if candidate:
+        resolved = Path(candidate).expanduser().resolve()
+    else:
+        resolved = (Path(__file__).resolve().parents[3] / "bluefolder-api").resolve()
+
+    if resolved.exists() and str(resolved) not in sys.path:
+        sys.path.append(str(resolved))
 
 
 class BlueFolderService:
@@ -22,14 +26,35 @@ class BlueFolderService:
 
     def __init__(self) -> None:
         _maybe_extend_sys_path()
+        self._ensure_runtime_dependencies()
         if settings.bluefolder_api_key:
             os.environ["BLUEFOLDER_API_KEY"] = settings.bluefolder_api_key
         if settings.bluefolder_account_name:
             os.environ["BLUEFOLDER_ACCOUNT_NAME"] = settings.bluefolder_account_name
+        if settings.bluefolder_base_url:
+            os.environ["BLUEFOLDER_BASE_URL"] = settings.bluefolder_base_url
+        if settings.bluefolder_host_header:
+            os.environ["BLUEFOLDER_HOST_HEADER"] = settings.bluefolder_host_header
+        if settings.bluefolder_verify_ssl is not None:
+            os.environ["BLUEFOLDER_VERIFY_SSL"] = str(settings.bluefolder_verify_ssl).lower()
+        if settings.bluefolder_timeout_seconds is not None:
+            os.environ["BLUEFOLDER_TIMEOUT_SECONDS"] = str(settings.bluefolder_timeout_seconds)
 
         from bluefolder_api.client import BlueFolderClient  # type: ignore
 
-        self.client = BlueFolderClient()
+        client_kwargs = {}
+        if settings.bluefolder_base_url:
+            client_kwargs["base_url"] = settings.bluefolder_base_url
+        self.client = BlueFolderClient(**client_kwargs)
+
+    def _ensure_runtime_dependencies(self) -> None:
+        """Fail fast when the HTTP client dependency is missing."""
+        try:
+            import requests  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "Missing Python dependency 'requests'. Run `python -m pip install -r requirements.txt` in bluebot-discord-extension."
+            ) from exc
 
     def list_active_techs(self) -> list[dict[str, Any]]:
         techs = self.client.users.list_active()
@@ -70,7 +95,13 @@ class BlueFolderService:
         return results
 
     def get_service_request(self, sr_id: int) -> dict[str, Any]:
-        sr_xml = self.client.service_requests.get_by_id(sr_id)
+        try:
+            sr_xml = self.client.service_requests.get_by_id(sr_id)
+        except Exception as exc:
+            return {
+                "id": str(sr_id),
+                "error": str(exc),
+            }
         sr = sr_xml.find(".//serviceRequest")
         if sr is None:
             return {}
