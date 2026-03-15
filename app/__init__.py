@@ -1,1 +1,1 @@
-"""BlueBot Discord application package."""
+"""Parts Cannon Discord application package."""

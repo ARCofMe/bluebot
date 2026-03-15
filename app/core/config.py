@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Environment-backed settings."""
 
-    app_name: str = "BlueBot Discord"
+    app_name: str = "Parts Cannon"
     environment: str = "dev"
     debug: str | bool = True
 

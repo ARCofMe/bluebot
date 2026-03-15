@@ -1,4 +1,4 @@
-# BlueBot Discord Extension
+# Parts Cannon Discord Extension
 
 Minimal Python Discord bot that uses the local `bluefolder-api` wrapper to surface BlueFolder data for technicians in the field.
 
@@ -107,7 +107,7 @@ Materials and labor are read from the `serviceRequests/get` payload for the SR. 
 
 ## Workflow Data Model
 
-BlueBot does not keep its own database for technician workflow state.
+Parts Cannon does not keep its own database for technician workflow state.
 
 - ETA, en route, and start updates are written to BlueFolder in two places: the assignment comment for the mapped technician's assignment and an internal service request note.
 - Complete uses BlueFolder's assignment completion endpoint and also writes an internal service request note.

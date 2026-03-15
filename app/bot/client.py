@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.services.bluefolder_service import BlueFolderService
 
 
-class BlueBotDiscord(commands.Bot):
+class PartsCannonDiscord(commands.Bot):
     """Discord bot wired to BlueFolder helpers."""
 
     def __init__(self) -> None:
@@ -29,7 +29,7 @@ class BlueBotDiscord(commands.Bot):
             await self.tree.sync()
 
 
-bot = BlueBotDiscord()
+bot = PartsCannonDiscord()
 
 
 def _my_tech_id(interaction: discord.Interaction) -> int | None:
@@ -124,7 +124,7 @@ async def ping(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("pong", ephemeral=True)
 
 
-@bot.tree.command(name="help", description="List BlueBot slash commands.")
+@bot.tree.command(name="help", description="List Parts Cannon slash commands.")
 async def help_command(interaction: discord.Interaction) -> None:
     lines = [
         "/help - show this command list",
