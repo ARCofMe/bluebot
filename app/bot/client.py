@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import json
+import re
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from app.core.config import settings
+from app.core.config import member_export_path, settings
 from app.services.bluefolder_service import BlueFolderService
 
 
@@ -17,6 +19,7 @@ class PartsCannonDiscord(commands.Bot):
 
     def __init__(self) -> None:
         intents = discord.Intents.default()
+        intents.members = True
         super().__init__(command_prefix="!", intents=intents)
         self.bluefolder = BlueFolderService()
 
@@ -56,6 +59,138 @@ def _parse_iso_date(raw: str) -> date | None:
         return date.fromisoformat(raw)
     except Exception:
         return None
+
+
+def _normalize_name(raw: str | None) -> str:
+    text = " ".join(str(raw or "").split()).strip().casefold()
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+    return text
+
+
+def _name_candidates(member: discord.Member) -> list[str]:
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for raw in [member.display_name, member.global_name, member.name]:
+        normalized = _normalize_name(raw)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
+    return candidates
+
+
+def _build_tech_map_suggestion(
+    members: list[dict[str, object]],
+    techs: list[dict[str, object]],
+) -> dict[str, object]:
+    techs_by_name: dict[str, list[dict[str, object]]] = {}
+    for tech in techs:
+        normalized = _normalize_name(str(tech.get("name") or ""))
+        if not normalized:
+            continue
+        techs_by_name.setdefault(normalized, []).append(tech)
+
+    suggested_map: dict[str, int] = {}
+    matched: list[dict[str, object]] = []
+    ambiguous: list[dict[str, object]] = []
+    unmatched_discord: list[dict[str, object]] = []
+    matched_tech_ids: set[int] = set()
+
+    for member in members:
+        member_candidates = []
+        for raw in [member.get("display_name"), member.get("global_name"), member.get("username")]:
+            normalized = _normalize_name(str(raw or ""))
+            if normalized and normalized not in member_candidates:
+                member_candidates.append(normalized)
+
+        possible_matches: list[dict[str, object]] = []
+        for candidate in member_candidates:
+            possible_matches.extend(techs_by_name.get(candidate, []))
+
+        unique_matches: dict[int, dict[str, object]] = {}
+        for tech in possible_matches:
+            tech_id = int(tech.get("id") or 0)
+            if tech_id:
+                unique_matches[tech_id] = tech
+
+        if len(unique_matches) == 1:
+            tech = next(iter(unique_matches.values()))
+            tech_id = int(tech["id"])
+            suggested_map[str(member["discord_user_id"])] = tech_id
+            matched_tech_ids.add(tech_id)
+            matched.append(
+                {
+                    "discord_user_id": member["discord_user_id"],
+                    "display_name": member.get("display_name"),
+                    "username": member.get("username"),
+                    "bluefolder_user_id": tech_id,
+                    "bluefolder_name": tech.get("name"),
+                }
+            )
+        elif len(unique_matches) > 1:
+            ambiguous.append(
+                {
+                    "discord_user_id": member["discord_user_id"],
+                    "display_name": member.get("display_name"),
+                    "username": member.get("username"),
+                    "candidate_bluefolder_users": [
+                        {"id": int(tech["id"]), "name": tech.get("name")}
+                        for tech in unique_matches.values()
+                    ],
+                }
+            )
+        else:
+            unmatched_discord.append(member)
+
+    unmatched_bluefolder = [
+        {"id": int(tech["id"]), "name": tech.get("name"), "email": tech.get("email")}
+        for tech in techs
+        if int(tech.get("id") or 0) not in matched_tech_ids
+    ]
+
+    return {
+        "suggested_discord_tech_map": suggested_map,
+        "suggested_discord_tech_map_env": f"DISCORD_TECH_MAP={json.dumps(suggested_map, separators=(',', ':'))}",
+        "matched": matched,
+        "ambiguous": ambiguous,
+        "unmatched_discord": unmatched_discord,
+        "unmatched_bluefolder": unmatched_bluefolder,
+    }
+
+
+def _require_guild_admin(interaction: discord.Interaction) -> bool:
+    perms = getattr(interaction.user, "guild_permissions", None)
+    return bool(perms and perms.manage_guild)
+
+
+async def _collect_members(
+    interaction: discord.Interaction,
+    *,
+    scope: str,
+) -> list[dict[str, object]]:
+    guild = interaction.guild
+    if guild is None:
+        return []
+
+    members: list[discord.Member]
+    if scope == "channel":
+        channel = interaction.channel
+        members = list(getattr(channel, "members", []) or [])
+    else:
+        members = [member async for member in guild.fetch_members(limit=None)]
+
+    exported: list[dict[str, object]] = []
+    for member in sorted(members, key=lambda item: (item.display_name.casefold(), item.name.casefold(), item.id)):
+        if member.bot:
+            continue
+        exported.append(
+            {
+                "discord_user_id": str(member.id),
+                "username": member.name,
+                "display_name": member.display_name,
+                "global_name": member.global_name,
+            }
+        )
+    return exported
 
 
 def _alert_tech_label(interaction: discord.Interaction) -> str:
@@ -129,6 +264,8 @@ async def help_command(interaction: discord.Interaction) -> None:
     lines = [
         "/help - show this command list",
         "/ping - verify bot connectivity",
+        "/export_member_map scope - export Discord user ids/names for env mapping",
+        "/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs",
         "/techs - list active BlueFolder technicians",
         "/my_jobs - today's assignments for your mapped tech",
         "/next_job - your next scheduled assignment today",
@@ -164,6 +301,90 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/waiver sr_id - generate the prefilled waiver link",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="export_member_map", description="Export Discord user ids and names to a JSON file.")
+@app_commands.describe(scope="Export all guild members or just members visible in this channel.")
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="guild", value="guild"),
+        app_commands.Choice(name="channel", value="channel"),
+    ]
+)
+async def export_member_map(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str],
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to export member ids.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    records = await _collect_members(interaction, scope=scope.value)
+    export_file = member_export_path()
+    export_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "guild_id": str(interaction.guild_id or ""),
+        "scope": scope.value,
+        "member_count": len(records),
+        "members": records,
+        "discord_tech_map_template": {item["discord_user_id"]: None for item in records},
+    }
+    export_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    await interaction.followup.send(
+        f"Wrote {len(records)} member records to `{export_file}`.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="suggest_tech_map", description="Suggest a DISCORD_TECH_MAP by matching Discord names to BlueFolder techs.")
+@app_commands.describe(scope="Compare either all guild members or just members visible in this channel.")
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="guild", value="guild"),
+        app_commands.Choice(name="channel", value="channel"),
+    ]
+)
+async def suggest_tech_map(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str],
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to build a tech-map suggestion.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    records = await _collect_members(interaction, scope=scope.value)
+    techs = bot.bluefolder.list_active_techs()
+    suggestion = _build_tech_map_suggestion(records, techs)
+
+    export_file = member_export_path()
+    export_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "guild_id": str(interaction.guild_id or ""),
+        "scope": scope.value,
+        "member_count": len(records),
+        "bluefolder_tech_count": len(techs),
+        **suggestion,
+    }
+    suggestion_path = export_file.with_name(f"{export_file.stem}_suggested_map.json")
+    suggestion_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    await interaction.followup.send(
+        (
+            f"Wrote suggested tech map to `{suggestion_path}`. "
+            f"Matched {len(suggestion['matched'])}, ambiguous {len(suggestion['ambiguous'])}, "
+            f"unmatched Discord {len(suggestion['unmatched_discord'])}, "
+            f"unmatched BlueFolder {len(suggestion['unmatched_bluefolder'])}."
+        ),
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="techs", description="List active BlueFolder technicians.")
