@@ -133,6 +133,7 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/attachments sr_id - recent service request attachments",
             "/customer sr_id - customer and contact details",
             "/equipment sr_id - customer equipment for the job site",
+            "/find_sr text - search recent service requests by SR id or subject",
             "/history sr_id - broader service request history",
             "/labor sr_id - labor recorded against the service request",
             "/materials sr_id - materials recorded against the service request",
@@ -1735,6 +1736,26 @@ async def search_customer(interaction: discord.Interaction, text: str) -> None:
     lines = []
     for idx, row in enumerate(rows, start=1):
         bits = [f"Customer {row.get('id')}", row.get("subject") or "Customer"]
+        lines.append(f"{idx}. {' | '.join(bits)}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="find_sr", description="Search recent service requests by SR id or subject.")
+@app_commands.describe(text="SR id fragment or subject text")
+async def find_sr(interaction: discord.Interaction, text: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    rows = bot.bluefolder.search_recent_service_requests(text, field="service_request")
+    if not rows:
+        await interaction.followup.send("No recent service requests matched that search.", ephemeral=True)
+        return
+
+    lines = []
+    for idx, row in enumerate(rows, start=1):
+        bits = [f"SR {row.get('id')}", row.get("subject") or "Service Request"]
+        if row.get("tech_name"):
+            bits.append(str(row["tech_name"]))
+        if row.get("start"):
+            bits.append(str(row["start"]))
         lines.append(f"{idx}. {' | '.join(bits)}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 

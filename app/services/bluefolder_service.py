@@ -762,6 +762,43 @@ class BlueFolderService:
         if not cleaned:
             return []
 
+        if field == "service_request":
+            needle = cleaned.casefold()
+            matches: list[dict[str, Any]] = []
+            today = date.today()
+            for tech in self.list_active_techs():
+                try:
+                    assignments = self.get_assignments_for_user_window(
+                        tech["id"],
+                        start_day=today - timedelta(days=14),
+                        end_day=today + timedelta(days=14),
+                    )
+                except Exception:
+                    continue
+                for item in assignments:
+                    sr_id = str(item.get("service_request_id") or "")
+                    subject = str(item.get("subject") or "")
+                    if needle not in sr_id.casefold() and needle not in subject.casefold():
+                        continue
+                    matches.append(
+                        {
+                            "id": sr_id,
+                            "subject": subject or "Service Request",
+                            "address": "",
+                            "start": item.get("start_display") or item.get("start"),
+                            "end": item.get("end_display") or item.get("end"),
+                            "tech_name": tech.get("name"),
+                        }
+                    )
+            deduped: dict[str, dict[str, Any]] = {}
+            for row in matches:
+                key = str(row.get("id") or "")
+                if key and key not in deduped:
+                    deduped[key] = row
+            rows = list(deduped.values())
+            rows.sort(key=lambda item: (str(item.get("start") or ""), str(item.get("subject") or "").casefold()), reverse=True)
+            return rows[:limit]
+
         if field == "customer":
             try:
                 xml = self.client.customers.list()
