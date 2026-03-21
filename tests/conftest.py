@@ -32,15 +32,49 @@ if "pydantic_settings" not in sys.modules:
     sys.modules["pydantic_settings"] = pydantic_settings
 
 
-if "app.services.bluefolder_service" not in sys.modules:
-    bluefolder_service = ModuleType("app.services.bluefolder_service")
+if "requests" not in sys.modules:
+    sys.modules["requests"] = ModuleType("requests")
 
-    class BlueFolderService:
-        def resolve_tech_id(self, discord_user_id, candidate_names=None):
-            return None
 
-    bluefolder_service.BlueFolderService = BlueFolderService
-    sys.modules["app.services.bluefolder_service"] = bluefolder_service
+if "bluefolder_api" not in sys.modules:
+    bluefolder_api = ModuleType("bluefolder_api")
+    bluefolder_api_client = ModuleType("bluefolder_api.client")
+
+    class BlueFolderClient:
+        def __init__(self, **kwargs):
+            self.users = SimpleNamespace(
+                list_active=lambda: [],
+                list_all=lambda: [],
+                get_by_id=lambda user_id: None,
+            )
+            self.assignments = SimpleNamespace(
+                list_for_user_range=lambda *args, **kwargs: [],
+            )
+            self.service_requests = SimpleNamespace(
+                get_by_id=lambda sr_id: SimpleNamespace(find=lambda pattern: None),
+                get_history=lambda sr_id: SimpleNamespace(findall=lambda pattern: []),
+                edit_assignment=lambda *args, **kwargs: SimpleNamespace(attrib={}, findtext=lambda pattern: None),
+                complete_assignment=lambda *args, **kwargs: SimpleNamespace(attrib={}, findtext=lambda pattern: None),
+                add_comment=lambda *args, **kwargs: SimpleNamespace(attrib={}, findtext=lambda pattern: None),
+            )
+            self.customers = SimpleNamespace(
+                list=lambda: SimpleNamespace(findall=lambda pattern: []),
+                get_by_id=lambda customer_id: SimpleNamespace(find=lambda pattern: None),
+            )
+            self.customer_contacts = SimpleNamespace(
+                list_for_customer=lambda customer_id: [],
+            )
+            self.attachments = SimpleNamespace(
+                list_for_service_request=lambda sr_id: [],
+            )
+            self.equipment = SimpleNamespace(
+                list_for_customer=lambda customer_id: [],
+            )
+
+    bluefolder_api_client.BlueFolderClient = BlueFolderClient
+    bluefolder_api.client = bluefolder_api_client
+    sys.modules["bluefolder_api"] = bluefolder_api
+    sys.modules["bluefolder_api.client"] = bluefolder_api_client
 
 
 if "discord" not in sys.modules:
