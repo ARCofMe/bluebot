@@ -16,6 +16,9 @@ class DummyBlueFolder:
     def get_dispatch_loads_for_day(self, day, limit=50):
         return []
 
+    def list_active_techs(self):
+        return []
+
 
 class DummyResponse:
     def __init__(self):
@@ -53,6 +56,8 @@ def _interaction(*, roles=(), manage_guild=False, user_id=1, display_name="Test 
     return SimpleNamespace(
         user=user,
         guild_id=123,
+        guild=None,
+        channel=None,
         response=DummyResponse(),
         followup=DummyFollowup(),
     )
@@ -225,3 +230,42 @@ def test_setup_hook_logs_and_reraises_sync_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="sync failed"):
         asyncio.run(client.bot.setup_hook())
+
+
+def test_collect_members_raises_runtime_error_when_guild_fetch_fails():
+    interaction = _interaction()
+
+    class DummyGuild:
+        def fetch_members(self, limit=None):
+            raise RuntimeError("forbidden")
+
+    interaction.guild = DummyGuild()
+
+    with pytest.raises(RuntimeError, match="Could not load Discord guild members"):
+        asyncio.run(client._collect_members(interaction, scope="guild"))
+
+
+def test_suggest_tech_map_handles_env_export_write_failure(monkeypatch):
+    monkeypatch.setattr(client.settings, "discord_admin_role_names", "Admin")
+    monkeypatch.setattr(client.bot, "bluefolder", DummyBlueFolder())
+    monkeypatch.setattr(
+        client,
+        "_collect_members",
+        lambda interaction, scope: asyncio.sleep(
+            0,
+            result=[{"discord_user_id": "1", "username": "testuser", "display_name": "Test User", "global_name": None, "role_names": []}],
+        ),
+    )
+    monkeypatch.setattr(client, "_write_json_export", lambda *args, **kwargs: "/tmp/suggested.json")
+    monkeypatch.setattr(
+        client,
+        "_write_text_export",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Could not write export file: disk full")),
+    )
+    interaction = _interaction(roles=("Admin",))
+
+    asyncio.run(client.suggest_tech_map(interaction, scope=SimpleNamespace(value="guild")))
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages
+    assert interaction.followup.messages[0]["content"] == "Could not write export file: disk full"

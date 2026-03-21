@@ -545,23 +545,35 @@ async def _collect_members(
     if guild is None:
         return []
 
-    members: list[discord.Member]
-    if scope == "channel":
-        channel = interaction.channel
-        members = list(getattr(channel, "members", []) or [])
-    else:
-        members = [member async for member in guild.fetch_members(limit=None)]
+    try:
+        members: list[discord.Member]
+        if scope == "channel":
+            channel = interaction.channel
+            members = list(getattr(channel, "members", []) or [])
+        else:
+            members = [member async for member in guild.fetch_members(limit=None)]
+    except Exception as exc:
+        if scope == "channel":
+            raise RuntimeError("Could not load Discord members visible in this channel.") from exc
+        raise RuntimeError("Could not load Discord guild members. Check Server Members Intent and bot permissions.") from exc
 
     exported: list[dict[str, object]] = []
-    for member in sorted(members, key=lambda item: (item.display_name.casefold(), item.name.casefold(), item.id)):
-        if member.bot:
+    for member in sorted(
+        members,
+        key=lambda item: (
+            str(getattr(item, "display_name", "") or "").casefold(),
+            str(getattr(item, "name", "") or "").casefold(),
+            int(getattr(item, "id", 0) or 0),
+        ),
+    ):
+        if getattr(member, "bot", False):
             continue
         exported.append(
             {
                 "discord_user_id": str(member.id),
-                "username": member.name,
-                "display_name": member.display_name,
-                "global_name": member.global_name,
+                "username": getattr(member, "name", ""),
+                "display_name": getattr(member, "display_name", getattr(member, "name", "")),
+                "global_name": getattr(member, "global_name", None),
                 "role_names": sorted(role.name for role in getattr(member, "roles", []) if getattr(role, "name", None)),
             }
         )
@@ -637,6 +649,16 @@ def _write_json_export(stem_suffix: str, payload: dict[str, object]) -> str:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Could not write export file: {exc}") from exc
+    return str(path)
+
+
+def _write_text_export(stem_suffix: str, text: str, *, extension: str = ".txt") -> str:
+    path = export_output_path(stem_suffix=stem_suffix, extension=extension)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
     except OSError as exc:
         raise RuntimeError(f"Could not write export file: {exc}") from exc
     return str(path)
@@ -1136,8 +1158,6 @@ async def export_member_map(
 
     await interaction.response.defer(ephemeral=True)
     records = await _collect_members(interaction, scope=scope.value)
-    export_file = export_output_path()
-    export_file.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "guild_id": str(interaction.guild_id or ""),
         "scope": scope.value,
@@ -1146,12 +1166,12 @@ async def export_member_map(
         "discord_tech_map_template": {item["discord_user_id"]: None for item in records},
     }
     try:
-        export_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except OSError as exc:
-        await interaction.followup.send(f"Could not write export file: {exc}", ephemeral=True)
+        export_path = _write_json_export("", payload)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
         return
     await interaction.followup.send(
-        f"Wrote {len(records)} member records to `{export_file}`.",
+        f"Wrote {len(records)} member records to `{export_path}`.",
         ephemeral=True,
     )
 
@@ -1189,13 +1209,15 @@ async def suggest_tech_map(
         "bluefolder_tech_count": len(techs),
         **suggestion,
     }
-    suggestion_path = export_output_path(stem_suffix="_suggested_map")
-    env_path = export_output_path(stem_suffix="_tech_map", extension=".env")
     try:
-        suggestion_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        env_path.write_text(f"{suggestion['suggested_discord_tech_map_env']}\n", encoding="utf-8")
-    except OSError as exc:
-        await interaction.followup.send(f"Could not write export file: {exc}", ephemeral=True)
+        suggestion_path = _write_json_export("_suggested_map", payload)
+        env_path = _write_text_export(
+            "_tech_map",
+            f"{suggestion['suggested_discord_tech_map_env']}\n",
+            extension=".env",
+        )
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
         return
 
     await interaction.followup.send(
