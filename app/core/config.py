@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     discord_bot_token: str
     discord_guild_id: int | None = None
     discord_tech_map: str | None = None
+    discord_tech_role_names: str | None = None
+    discord_dispatcher_role_names: str | None = None
+    discord_parts_role_names: str | None = None
     dispatcher_alert_channel_id: int | None = None
     dispatcher_alert_on_contact_issue: bool = True
     parts_alert_channel_id: int | None = None
@@ -71,6 +74,28 @@ class Settings(BaseSettings):
                 except Exception:
                     continue
         return result
+
+    @staticmethod
+    def _parse_role_names(raw: str | None) -> set[str]:
+        if not raw:
+            return set()
+        return {
+            part.strip().casefold()
+            for part in raw.split(",")
+            if part and part.strip()
+        }
+
+    @property
+    def parsed_discord_tech_roles(self) -> set[str]:
+        return self._parse_role_names(self.discord_tech_role_names)
+
+    @property
+    def parsed_discord_dispatcher_roles(self) -> set[str]:
+        return self._parse_role_names(self.discord_dispatcher_role_names)
+
+    @property
+    def parsed_discord_parts_roles(self) -> set[str]:
+        return self._parse_role_names(self.discord_parts_role_names)
 
 
 settings = Settings()

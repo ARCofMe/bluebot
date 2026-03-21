@@ -118,6 +118,8 @@ def _help_sections() -> list[tuple[str, list[str]]]:
         "Mapping And Admin": [
             "/export_member_map scope - export Discord user ids/names for env mapping",
             "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
+            "/mapping_drift scope - audit role and mapping drift across members",
+            "/role_audit scope - summarize configured Discord role coverage",
             "/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs",
             "/tech_map_status scope - audit mapping coverage for guild/channel members",
             "/who_am_i_mapped_to - show your Discord to BlueFolder tech mapping status",
@@ -318,6 +320,20 @@ def _has_configured_role(interaction: discord.Interaction, role_names: set[str])
     return bool(_member_role_names(interaction) & role_names)
 
 
+def _record_role_names(record: dict[str, object]) -> set[str]:
+    return {
+        str(name).casefold()
+        for name in (record.get("role_names") or [])
+        if str(name).strip()
+    }
+
+
+def _record_has_configured_role(record: dict[str, object], role_names: set[str]) -> bool:
+    if not role_names:
+        return False
+    return bool(_record_role_names(record) & role_names)
+
+
 def _require_dispatch_access(interaction: discord.Interaction) -> bool:
     if _require_guild_admin(interaction):
         return True
@@ -371,6 +387,7 @@ async def _collect_members(
                 "username": member.name,
                 "display_name": member.display_name,
                 "global_name": member.global_name,
+                "role_names": sorted(role.name for role in getattr(member, "roles", []) if getattr(role, "name", None)),
             }
         )
     return exported
@@ -403,6 +420,7 @@ def _discord_member_record(interaction: discord.Interaction) -> dict[str, object
         "username": interaction.user.name,
         "display_name": getattr(interaction.user, "display_name", interaction.user.name),
         "global_name": getattr(interaction.user, "global_name", None),
+        "role_names": sorted(role.name for role in getattr(interaction.user, "roles", []) if getattr(role, "name", None)),
     }
 
 
@@ -412,6 +430,7 @@ def _discord_member_record_from_member(member: discord.abc.User) -> dict[str, ob
         "username": member.name,
         "display_name": getattr(member, "display_name", member.name),
         "global_name": getattr(member, "global_name", None),
+        "role_names": sorted(role.name for role in getattr(member, "roles", []) if getattr(role, "name", None)),
     }
 
 
@@ -651,6 +670,9 @@ async def lookup_member(
         f"Discord user: {record['display_name']} (@{record['username']})",
         f"Discord ID: {user.id}",
     ]
+    role_names = sorted(_record_role_names(record))
+    if role_names:
+        lines.append("Configured roles: " + ", ".join(role_names))
     if direct_map:
         mapped_tech = next((tech for tech in techs if int(tech.get('id') or 0) == int(direct_map)), None)
         if mapped_tech:
@@ -671,6 +693,121 @@ async def lookup_member(
         lines.append("Name-based match: none")
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="role_audit", description="Summarize configured Discord role coverage.")
+@app_commands.describe(scope="Audit all guild members or just members visible in this channel.")
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="guild", value="guild"),
+        app_commands.Choice(name="channel", value="channel"),
+    ]
+)
+async def role_audit(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str],
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to audit roles.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    records = await _collect_members(interaction, scope=scope.value)
+    tech_count = sum(1 for record in records if _record_has_configured_role(record, settings.parsed_discord_tech_roles))
+    dispatcher_count = sum(1 for record in records if _record_has_configured_role(record, settings.parsed_discord_dispatcher_roles))
+    parts_count = sum(1 for record in records if _record_has_configured_role(record, settings.parsed_discord_parts_roles))
+    no_configured_role = sum(
+        1
+        for record in records
+        if not _record_has_configured_role(record, settings.parsed_discord_tech_roles)
+        and not _record_has_configured_role(record, settings.parsed_discord_dispatcher_roles)
+        and not _record_has_configured_role(record, settings.parsed_discord_parts_roles)
+    )
+
+    lines = [
+        f"Scope: {scope.value}",
+        f"Members checked: {len(records)}",
+        f"Tech role matches: {tech_count}",
+        f"Dispatcher role matches: {dispatcher_count}",
+        f"Parts role matches: {parts_count}",
+        f"No configured roles: {no_configured_role}",
+    ]
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="mapping_drift", description="Audit role and mapping drift across members.")
+@app_commands.describe(scope="Audit all guild members or just members visible in this channel.")
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="guild", value="guild"),
+        app_commands.Choice(name="channel", value="channel"),
+    ]
+)
+async def mapping_drift(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str],
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to audit mapping drift.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    records = await _collect_members(interaction, scope=scope.value)
+    techs = bot.bluefolder.list_active_techs()
+    active_tech_ids = {int(tech.get("id") or 0) for tech in techs}
+    configured_map = settings.parsed_discord_tech_map
+
+    tech_role_no_map = 0
+    env_map_without_tech_role = 0
+    stale_env_map = 0
+    exact_match_no_tech_role = 0
+    sample_lines: list[str] = []
+
+    for record in records:
+        discord_user_id = str(record["discord_user_id"])
+        has_tech_role = _record_has_configured_role(record, settings.parsed_discord_tech_roles)
+        mapped_tech_id = configured_map.get(discord_user_id)
+        exact_matches = _matching_techs_for_member_record(record, techs)
+
+        if has_tech_role and not mapped_tech_id and len(exact_matches) != 1:
+            tech_role_no_map += 1
+            if len(sample_lines) < 8:
+                sample_lines.append(f"tech role, no clear map: {record.get('display_name') or record.get('username')}")
+        if mapped_tech_id and not has_tech_role:
+            env_map_without_tech_role += 1
+            if len(sample_lines) < 8:
+                sample_lines.append(f"mapped, no tech role: {record.get('display_name') or record.get('username')} -> {mapped_tech_id}")
+        if mapped_tech_id and int(mapped_tech_id) not in active_tech_ids:
+            stale_env_map += 1
+            if len(sample_lines) < 8:
+                sample_lines.append(f"stale env map: {record.get('display_name') or record.get('username')} -> {mapped_tech_id}")
+        if len(exact_matches) == 1 and not has_tech_role:
+            exact_match_no_tech_role += 1
+            if len(sample_lines) < 8:
+                tech = exact_matches[0]
+                sample_lines.append(
+                    f"exact BF match, no tech role: {record.get('display_name') or record.get('username')} -> {tech.get('name')} ({tech.get('id')})"
+                )
+
+    lines = [
+        f"Scope: {scope.value}",
+        f"Members checked: {len(records)}",
+        f"Tech role but no clear map: {tech_role_no_map}",
+        f"Mapped in env but missing tech role: {env_map_without_tech_role}",
+        f"Stale env tech maps: {stale_env_map}",
+        f"Exact BlueFolder match but missing tech role: {exact_match_no_tech_role}",
+    ]
+    if sample_lines:
+        lines.append("")
+        lines.append("Examples:")
+        lines.extend(sample_lines)
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
 @bot.tree.command(name="export_member_map", description="Export Discord user ids and names to a JSON file.")
