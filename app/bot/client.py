@@ -107,6 +107,7 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/waiver sr_id - generate the prefilled waiver link",
         ],
         "Dispatch": [
+            "/next_openings - show which techs are lightest today",
             "/sr_brief sr_id - compact dispatch summary for a service request",
             "/today_board - today's tech load snapshot for dispatch",
         ],
@@ -923,11 +924,48 @@ async def today_board(interaction: discord.Interaction) -> None:
         await interaction.followup.send("No tech load data found for today.", ephemeral=True)
         return
 
-    lines = [f"Today Board ({date.today().isoformat()}):"]
+    zero_count = sum(1 for item in loads if int(item.get("assignment_count") or 0) == 0)
+    heavy_count = sum(1 for item in loads if int(item.get("assignment_count") or 0) >= 5)
+    lines = [
+        f"Today Board ({date.today().isoformat()}):",
+        f"Techs shown: {len(loads)} | idle: {zero_count} | heavy load (5+): {heavy_count}",
+    ]
     for item in loads:
         first_start = item.get("first_start") or "no start time"
+        last_end = item.get("last_end") or "no end time"
         lines.append(
-            f"{item.get('tech_name') or 'Unknown'} ({item.get('tech_id')}): {item.get('assignment_count')} assignment(s), first at {first_start}"
+            f"{item.get('tech_name') or 'Unknown'} ({item.get('tech_id')}): {item.get('assignment_count')} assignment(s), first at {first_start}, last end {last_end}"
+        )
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="next_openings", description="Show which techs are lightest today.")
+async def next_openings(interaction: discord.Interaction) -> None:
+    if not _require_dispatch_access(interaction):
+        await interaction.response.send_message(
+            "You need a configured dispatcher role or `Manage Server` permission for this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    loads = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=15)
+    if not loads:
+        await interaction.followup.send("No tech load data found for today.", ephemeral=True)
+        return
+
+    ranked = sorted(
+        loads,
+        key=lambda item: (
+            int(item.get("assignment_count") or 0),
+            item.get("first_start") or "",
+            str(item.get("tech_name") or "").casefold(),
+        ),
+    )
+    lines = [f"Next Openings ({date.today().isoformat()}):"]
+    for item in ranked[:8]:
+        lines.append(
+            f"{item.get('tech_name') or 'Unknown'} ({item.get('tech_id')}): {item.get('assignment_count')} assignment(s), first at {item.get('first_start') or 'no start time'}"
         )
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 

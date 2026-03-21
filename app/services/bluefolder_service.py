@@ -528,6 +528,7 @@ class BlueFolderService:
                     "tech_name": tech["name"],
                     "assignment_count": len(assignments),
                     "first_start": assignments[0].get("start_display") if assignments else None,
+                    "last_end": assignments[-1].get("end_display") if assignments else None,
                 }
             )
         loads.sort(key=lambda item: (-item["assignment_count"], item["tech_name"].casefold()))
