@@ -35,6 +35,118 @@ class PartsCannonDiscord(commands.Bot):
 
 bot = PartsCannonDiscord()
 _DISCORD_MESSAGE_LIMIT = 2000
+ACCESS_ALL = "all"
+ACCESS_ADMIN = "admin"
+ACCESS_DISPATCH = "dispatch"
+ACCESS_PARTS = "parts"
+ACCESS_MAPPED_TECH = "mapped_tech"
+
+COMMAND_ACCESS_POLICY: dict[str, str] = {
+    "access_issue": ACCESS_MAPPED_TECH,
+    "assignments_today": ACCESS_DISPATCH,
+    "complete": ACCESS_MAPPED_TECH,
+    "damaged_part": ACCESS_MAPPED_TECH,
+    "enroute": ACCESS_MAPPED_TECH,
+    "eta": ACCESS_MAPPED_TECH,
+    "export_member_map": ACCESS_ADMIN,
+    "export_mapping_audit": ACCESS_ADMIN,
+    "export_today_board": ACCESS_DISPATCH,
+    "lookup_member": ACCESS_ADMIN,
+    "mapping_drift": ACCESS_ADMIN,
+    "missing_part": ACCESS_MAPPED_TECH,
+    "my_day": ACCESS_MAPPED_TECH,
+    "my_jobs": ACCESS_MAPPED_TECH,
+    "my_next_packet": ACCESS_MAPPED_TECH,
+    "my_week": ACCESS_MAPPED_TECH,
+    "next_job": ACCESS_MAPPED_TECH,
+    "next_openings": ACCESS_DISPATCH,
+    "no_answer": ACCESS_MAPPED_TECH,
+    "not_home": ACCESS_MAPPED_TECH,
+    "note_add": ACCESS_MAPPED_TECH,
+    "parts_brief": ACCESS_PARTS,
+    "parts_notes": ACCESS_PARTS,
+    "role_audit": ACCESS_ADMIN,
+    "sr_brief": ACCESS_DISPATCH,
+    "start": ACCESS_MAPPED_TECH,
+    "suggest_tech_map": ACCESS_ADMIN,
+    "tech_day": ACCESS_DISPATCH,
+    "tech_loads": ACCESS_DISPATCH,
+    "tech_map_status": ACCESS_ADMIN,
+    "today_board": ACCESS_DISPATCH,
+    "who_has_sr": ACCESS_DISPATCH,
+}
+
+HELP_SECTIONS: dict[str, list[tuple[str, str]]] = {
+    "General": [
+        ("/bf_status - BlueFolder connectivity/config status", "bf_status"),
+        ("/help - show this command list", "help"),
+        ("/ping - verify bot connectivity", "ping"),
+        ("/waiver sr_id - generate the prefilled waiver link", "waiver"),
+    ],
+    "Dispatch": [
+        ("/export_today_board - write today's dispatch board snapshot to JSON", "export_today_board"),
+        ("/next_openings - show which techs are lightest today", "next_openings"),
+        ("/sr_brief sr_id - compact dispatch summary for a service request", "sr_brief"),
+        ("/today_board - today's tech load snapshot for dispatch", "today_board"),
+    ],
+    "Parts": [
+        ("/parts_notes sr_id - recent parts-related notes for a service request", "parts_notes"),
+        ("/parts_brief sr_id - compact parts-facing summary for a service request", "parts_brief"),
+    ],
+    "Mapping And Admin": [
+        ("/export_member_map scope - export Discord user ids/names for env mapping", "export_member_map"),
+        ("/export_mapping_audit scope - write mapping/role audit snapshot to JSON", "export_mapping_audit"),
+        ("/lookup_member user - inspect one Discord member's BlueFolder mapping state", "lookup_member"),
+        ("/mapping_drift scope - audit role and mapping drift across members", "mapping_drift"),
+        ("/role_audit scope - summarize configured Discord role coverage", "role_audit"),
+        ("/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs", "suggest_tech_map"),
+        ("/tech_map_status scope - audit mapping coverage for guild/channel members", "tech_map_status"),
+        ("/who_am_i_mapped_to - show your Discord to BlueFolder tech mapping status", "who_am_i_mapped_to"),
+    ],
+    "Tech Schedules": [
+        ("/assignments_today tech_id - today's assignments for a tech", "assignments_today"),
+        ("/my_day date - show your assignments for a specific YYYY-MM-DD date", "my_day"),
+        ("/my_jobs - today's assignments for your mapped tech", "my_jobs"),
+        ("/my_next_packet - compact packet for your next assignment", "my_next_packet"),
+        ("/my_status - show your mapping, today's job count, and next assignment", "my_status"),
+        ("/my_week - show your assignment counts for the next 7 days", "my_week"),
+        ("/next_job - your next scheduled assignment today", "next_job"),
+        ("/tech_day tech_id date - assignments for one tech on a specific day", "tech_day"),
+        ("/tech_loads - today's assignment counts by tech", "tech_loads"),
+        ("/techs - list active BlueFolder technicians", "techs"),
+        ("/who_has_sr sr_id - find who has a service request in the next 14 days", "who_has_sr"),
+    ],
+    "Service Requests": [
+        ("/attachments sr_id - recent service request attachments", "attachments"),
+        ("/customer sr_id - customer and contact details", "customer"),
+        ("/equipment sr_id - customer equipment for the job site", "equipment"),
+        ("/find_sr text - search recent service requests by SR id or subject", "find_sr"),
+        ("/history sr_id - broader service request history", "history"),
+        ("/job_packet sr_id - compact field packet for one service request", "job_packet"),
+        ("/labor sr_id - labor recorded against the service request", "labor"),
+        ("/materials sr_id - materials recorded against the service request", "materials"),
+        ("/notes sr_id - recent service request notes", "notes"),
+        ("/search_address text - address search is limited on this BlueFolder tenant", "search_address"),
+        ("/search_customer text - search the BlueFolder customer directory", "search_customer"),
+        ("/site sr_id - site address and site notes", "site"),
+        ("/sr sr_id - service request summary", "sr"),
+        ("/troubleshoot sr_id - pull recent diagnosis/work context", "troubleshoot"),
+        ("/user user_id - BlueFolder user lookup", "user"),
+        ("/customer_lookup customer_id - BlueFolder customer lookup", "customer_lookup"),
+    ],
+    "Workflow Updates": [
+        ("/access_issue sr_id details - log an access problem", "access_issue"),
+        ("/complete sr_id - complete your assigned job", "complete"),
+        ("/damaged_part sr_id details - log a damaged part issue", "damaged_part"),
+        ("/enroute sr_id [minutes] - mark yourself en route and optionally record ETA", "enroute"),
+        ("/eta sr_id minutes - update ETA on your assigned job", "eta"),
+        ("/missing_part sr_id details - log a missing part issue", "missing_part"),
+        ("/no_answer sr_id [details] - log that the customer did not answer", "no_answer"),
+        ("/not_home sr_id [details] - log that the customer was not home", "not_home"),
+        ("/note_add sr_id text - add an internal service request note", "note_add"),
+        ("/start sr_id - mark yourself started on your assigned job", "start"),
+    ],
+}
 
 
 def _my_tech_id(interaction: discord.Interaction) -> int | None:
@@ -96,97 +208,32 @@ def _chunk_lines(lines: list[str], *, limit: int = _DISCORD_MESSAGE_LIMIT) -> li
     if current:
         chunks.append("\n".join(current))
     return chunks
+def _has_access(interaction: discord.Interaction, access: str) -> bool:
+    if access == ACCESS_ALL:
+        return True
+    if access == ACCESS_ADMIN:
+        return _require_admin_access(interaction)
+    if access == ACCESS_DISPATCH:
+        return _require_dispatch_access(interaction)
+    if access == ACCESS_PARTS:
+        return _require_parts_access(interaction)
+    if access == ACCESS_MAPPED_TECH:
+        return _mapped_tech_id(interaction) is not None
+    return False
+
+
+def _command_access(command_name: str) -> str:
+    return COMMAND_ACCESS_POLICY.get(command_name, ACCESS_ALL)
 
 
 def _help_sections(interaction: discord.Interaction) -> list[tuple[str, list[str]]]:
-    sections = {
-        "General": [
-            ("/bf_status - BlueFolder connectivity/config status", "all"),
-            ("/help - show this command list", "all"),
-            ("/ping - verify bot connectivity", "all"),
-            ("/waiver sr_id - generate the prefilled waiver link", "all"),
-        ],
-        "Dispatch": [
-            ("/export_today_board - write today's dispatch board snapshot to JSON", "dispatch"),
-            ("/next_openings - show which techs are lightest today", "dispatch"),
-            ("/sr_brief sr_id - compact dispatch summary for a service request", "dispatch"),
-            ("/today_board - today's tech load snapshot for dispatch", "dispatch"),
-        ],
-        "Parts": [
-            ("/parts_notes sr_id - recent parts-related notes for a service request", "parts"),
-            ("/parts_brief sr_id - compact parts-facing summary for a service request", "parts"),
-        ],
-        "Mapping And Admin": [
-            ("/export_member_map scope - export Discord user ids/names for env mapping", "admin"),
-            ("/export_mapping_audit scope - write mapping/role audit snapshot to JSON", "admin"),
-            ("/lookup_member user - inspect one Discord member's BlueFolder mapping state", "admin"),
-            ("/mapping_drift scope - audit role and mapping drift across members", "admin"),
-            ("/role_audit scope - summarize configured Discord role coverage", "admin"),
-            ("/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs", "admin"),
-            ("/tech_map_status scope - audit mapping coverage for guild/channel members", "admin"),
-            ("/who_am_i_mapped_to - show your Discord to BlueFolder tech mapping status", "all"),
-        ],
-        "Tech Schedules": [
-            ("/assignments_today tech_id - today's assignments for a tech", "dispatch"),
-            ("/my_day date - show your assignments for a specific YYYY-MM-DD date", "mapped_tech"),
-            ("/my_jobs - today's assignments for your mapped tech", "mapped_tech"),
-            ("/my_next_packet - compact packet for your next assignment", "mapped_tech"),
-            ("/my_status - show your mapping, today's job count, and next assignment", "all"),
-            ("/my_week - show your assignment counts for the next 7 days", "mapped_tech"),
-            ("/next_job - your next scheduled assignment today", "mapped_tech"),
-            ("/tech_day tech_id date - assignments for one tech on a specific day", "dispatch"),
-            ("/tech_loads - today's assignment counts by tech", "dispatch"),
-            ("/techs - list active BlueFolder technicians", "all"),
-            ("/who_has_sr sr_id - find who has a service request in the next 14 days", "dispatch"),
-        ],
-        "Service Requests": [
-            ("/attachments sr_id - recent service request attachments", "all"),
-            ("/customer sr_id - customer and contact details", "all"),
-            ("/equipment sr_id - customer equipment for the job site", "all"),
-            ("/find_sr text - search recent service requests by SR id or subject", "all"),
-            ("/history sr_id - broader service request history", "all"),
-            ("/job_packet sr_id - compact field packet for one service request", "all"),
-            ("/labor sr_id - labor recorded against the service request", "all"),
-            ("/materials sr_id - materials recorded against the service request", "all"),
-            ("/notes sr_id - recent service request notes", "all"),
-            ("/search_address text - address search is limited on this BlueFolder tenant", "all"),
-            ("/search_customer text - search the BlueFolder customer directory", "all"),
-            ("/site sr_id - site address and site notes", "all"),
-            ("/sr sr_id - service request summary", "all"),
-            ("/troubleshoot sr_id - pull recent diagnosis/work context", "all"),
-            ("/user user_id - BlueFolder user lookup", "all"),
-            ("/customer_lookup customer_id - BlueFolder customer lookup", "all"),
-        ],
-        "Workflow Updates": [
-            ("/access_issue sr_id details - log an access problem", "mapped_tech"),
-            ("/complete sr_id - complete your assigned job", "mapped_tech"),
-            ("/damaged_part sr_id details - log a damaged part issue", "mapped_tech"),
-            ("/enroute sr_id [minutes] - mark yourself en route and optionally record ETA", "mapped_tech"),
-            ("/eta sr_id minutes - update ETA on your assigned job", "mapped_tech"),
-            ("/missing_part sr_id details - log a missing part issue", "mapped_tech"),
-            ("/no_answer sr_id [details] - log that the customer did not answer", "mapped_tech"),
-            ("/not_home sr_id [details] - log that the customer was not home", "mapped_tech"),
-            ("/note_add sr_id text - add an internal service request note", "mapped_tech"),
-            ("/start sr_id - mark yourself started on your assigned job", "mapped_tech"),
-        ],
-    }
-
-    def allowed(access: str) -> bool:
-        if access == "all":
-            return True
-        if access == "admin":
-            return _require_admin_access(interaction)
-        if access == "dispatch":
-            return _require_dispatch_access(interaction)
-        if access == "parts":
-            return _require_parts_access(interaction)
-        if access == "mapped_tech":
-            return _mapped_tech_id(interaction) is not None
-        return False
-
     visible_sections: list[tuple[str, list[str]]] = []
-    for title in sorted(sections):
-        commands = sorted(text for text, access in sections[title] if allowed(access))
+    for title in sorted(HELP_SECTIONS):
+        commands = sorted(
+            text
+            for text, command_name in HELP_SECTIONS[title]
+            if _has_access(interaction, _command_access(command_name))
+        )
         if commands:
             visible_sections.append((title, commands))
     return visible_sections
