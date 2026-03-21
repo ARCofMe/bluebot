@@ -106,6 +106,10 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/ping - verify bot connectivity",
             "/waiver sr_id - generate the prefilled waiver link",
         ],
+        "Dispatch": [
+            "/sr_brief sr_id - compact dispatch summary for a service request",
+            "/today_board - today's tech load snapshot for dispatch",
+        ],
         "Mapping And Admin": [
             "/export_member_map scope - export Discord user ids/names for env mapping",
             "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
@@ -292,6 +296,41 @@ def _require_guild_admin(interaction: discord.Interaction) -> bool:
     return bool(perms and perms.manage_guild)
 
 
+def _member_role_names(interaction: discord.Interaction) -> set[str]:
+    roles = getattr(interaction.user, "roles", []) or []
+    names: set[str] = set()
+    for role in roles:
+        name = getattr(role, "name", None)
+        if name:
+            names.add(str(name).casefold())
+    return names
+
+
+def _has_configured_role(interaction: discord.Interaction, role_names: set[str]) -> bool:
+    if not role_names:
+        return False
+    return bool(_member_role_names(interaction) & role_names)
+
+
+def _require_dispatch_access(interaction: discord.Interaction) -> bool:
+    if _require_guild_admin(interaction):
+        return True
+    return _has_configured_role(interaction, settings.parsed_discord_dispatcher_roles)
+
+
+def _role_labels(interaction: discord.Interaction) -> list[str]:
+    labels: list[str] = []
+    if _require_guild_admin(interaction):
+        labels.append("guild_admin")
+    if _has_configured_role(interaction, settings.parsed_discord_dispatcher_roles):
+        labels.append("dispatcher")
+    if _has_configured_role(interaction, settings.parsed_discord_parts_roles):
+        labels.append("parts")
+    if _has_configured_role(interaction, settings.parsed_discord_tech_roles):
+        labels.append("tech")
+    return labels
+
+
 async def _collect_members(
     interaction: discord.Interaction,
     *,
@@ -360,6 +399,21 @@ def _discord_member_record_from_member(member: discord.abc.User) -> dict[str, ob
         "display_name": getattr(member, "display_name", member.name),
         "global_name": getattr(member, "global_name", None),
     }
+
+
+async def _send_write_preview(
+    interaction: discord.Interaction,
+    *,
+    action: str,
+    sr_id: int,
+    preview_lines: list[str],
+) -> None:
+    lines = [
+        f"Preview only: `{action}` for service request `{sr_id}`.",
+        *preview_lines,
+        "Run the command again with `confirm:true` to write this update.",
+    ]
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 async def _send_channel_alert(
@@ -767,6 +821,9 @@ async def my_status(interaction: discord.Interaction) -> None:
         f"Discord user: {record['display_name']} (@{record['username']})",
         f"Discord ID: {interaction.user.id}",
     ]
+    labels = _role_labels(interaction)
+    if labels:
+        lines.append("Detected roles: " + ", ".join(labels))
     if direct_map:
         mapped_tech = next((tech for tech in techs if int(tech.get('id') or 0) == int(direct_map)), None)
         if mapped_tech:
@@ -835,6 +892,87 @@ async def my_week(interaction: discord.Interaction) -> None:
             )
         else:
             lines.append(f"{day.isoformat()}: 0 assignments")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="today_board", description="Show today's assignment load snapshot for dispatch.")
+async def today_board(interaction: discord.Interaction) -> None:
+    if not _require_dispatch_access(interaction):
+        await interaction.response.send_message(
+            "You need a configured dispatcher role or `Manage Server` permission for this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    loads = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=15)
+    if not loads:
+        await interaction.followup.send("No tech load data found for today.", ephemeral=True)
+        return
+
+    lines = [f"Today Board ({date.today().isoformat()}):"]
+    for item in loads:
+        first_start = item.get("first_start") or "no start time"
+        lines.append(
+            f"{item.get('tech_name') or 'Unknown'} ({item.get('tech_id')}): {item.get('assignment_count')} assignment(s), first at {first_start}"
+        )
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="sr_brief", description="Show a compact dispatch summary for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def sr_brief(interaction: discord.Interaction, sr_id: int) -> None:
+    if not _require_dispatch_access(interaction):
+        await interaction.response.send_message(
+            "You need a configured dispatcher role or `Manage Server` permission for this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    item = bot.bluefolder.get_service_request(sr_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
+    if not item:
+        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+        return
+
+    notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
+    assignments = bot.bluefolder.find_sr_assignment_window(
+        sr_id,
+        start_day=date.today(),
+        end_day=date.today() + timedelta(days=7),
+    )
+
+    lines = [
+        f"SR {item['id']}",
+        f"Subject: {item.get('subject') or 'n/a'}",
+        f"Status: {item.get('status') or 'n/a'}",
+        f"Priority: {item.get('priority') or 'n/a'}",
+        f"Customer: {item.get('customer_name') or 'n/a'}",
+        f"Address: {item.get('address') or 'n/a'}",
+    ]
+    if assignments:
+        lines.append(
+            "Assignments: " + "; ".join(
+                f"{row.get('tech_name')} {row.get('start') or 'unscheduled'}"
+                for row in assignments[:3]
+            )
+        )
+    else:
+        lines.append("Assignments: none found in next 7 days")
+    if notes:
+        latest = notes[0]
+        lines.append(
+            f"Latest note: {(latest.get('entryType') or 'Note')} | {latest.get('dateCreated') or 'unknown'}"
+        )
+        if latest.get("text"):
+            lines.append(f"Latest text: {latest['text'][:200]}")
+
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
@@ -1012,8 +1150,19 @@ async def history(interaction: discord.Interaction, sr_id: int) -> None:
 
 
 @bot.tree.command(name="note_add", description="Add an internal note to a service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID", text="Note text to append")
-async def note_add(interaction: discord.Interaction, sr_id: int, text: str) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", text="Note text to append", confirm="Set true to write the note")
+async def note_add(interaction: discord.Interaction, sr_id: int, text: str, confirm: bool = False) -> None:
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="note_add",
+            sr_id=sr_id,
+            preview_lines=[
+                "This will add an internal SR note.",
+                f"Text: {text[:250]}",
+            ],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     result = bot.bluefolder.add_service_request_note(
         sr_id,
@@ -1079,8 +1228,16 @@ async def troubleshoot(interaction: discord.Interaction, sr_id: int) -> None:
 
 
 @bot.tree.command(name="no_answer", description="Log that the customer did not answer.")
-@app_commands.describe(sr_id="BlueFolder service request ID", details="Optional extra detail")
-async def no_answer(interaction: discord.Interaction, sr_id: int, details: str | None = None) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Optional extra detail", confirm="Set true to write the update")
+async def no_answer(interaction: discord.Interaction, sr_id: int, details: str | None = None, confirm: bool = False) -> None:
+    if not confirm:
+        preview = [
+            "This will log a no-answer contact issue and may notify dispatch.",
+        ]
+        if details:
+            preview.append(f"Details: {details[:250]}")
+        await _send_write_preview(interaction, action="no_answer", sr_id=sr_id, preview_lines=preview)
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
@@ -1122,8 +1279,16 @@ async def no_answer(interaction: discord.Interaction, sr_id: int, details: str |
 
 
 @bot.tree.command(name="not_home", description="Log that the customer was not home at arrival.")
-@app_commands.describe(sr_id="BlueFolder service request ID", details="Optional extra detail")
-async def not_home(interaction: discord.Interaction, sr_id: int, details: str | None = None) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Optional extra detail", confirm="Set true to write the update")
+async def not_home(interaction: discord.Interaction, sr_id: int, details: str | None = None, confirm: bool = False) -> None:
+    if not confirm:
+        preview = [
+            "This will log a not-home contact issue and may notify dispatch.",
+        ]
+        if details:
+            preview.append(f"Details: {details[:250]}")
+        await _send_write_preview(interaction, action="not_home", sr_id=sr_id, preview_lines=preview)
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
@@ -1165,8 +1330,19 @@ async def not_home(interaction: discord.Interaction, sr_id: int, details: str | 
 
 
 @bot.tree.command(name="access_issue", description="Log an access problem for a service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID", details="Access problem details")
-async def access_issue(interaction: discord.Interaction, sr_id: int, details: str) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Access problem details", confirm="Set true to write the update")
+async def access_issue(interaction: discord.Interaction, sr_id: int, details: str, confirm: bool = False) -> None:
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="access_issue",
+            sr_id=sr_id,
+            preview_lines=[
+                "This will log an access issue and may notify dispatch.",
+                f"Details: {details[:250]}",
+            ],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
@@ -1208,8 +1384,19 @@ async def access_issue(interaction: discord.Interaction, sr_id: int, details: st
 
 
 @bot.tree.command(name="missing_part", description="Log a missing part issue for a service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID", details="Missing part details")
-async def missing_part(interaction: discord.Interaction, sr_id: int, details: str) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Missing part details", confirm="Set true to write the update")
+async def missing_part(interaction: discord.Interaction, sr_id: int, details: str, confirm: bool = False) -> None:
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="missing_part",
+            sr_id=sr_id,
+            preview_lines=[
+                "This will log a missing-part issue and may notify parts.",
+                f"Details: {details[:250]}",
+            ],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
@@ -1248,8 +1435,19 @@ async def missing_part(interaction: discord.Interaction, sr_id: int, details: st
 
 
 @bot.tree.command(name="damaged_part", description="Log a damaged part issue for a service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID", details="Damaged part details")
-async def damaged_part(interaction: discord.Interaction, sr_id: int, details: str) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", details="Damaged part details", confirm="Set true to write the update")
+async def damaged_part(interaction: discord.Interaction, sr_id: int, details: str, confirm: bool = False) -> None:
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="damaged_part",
+            sr_id=sr_id,
+            preview_lines=[
+                "This will log a damaged-part issue and may notify parts.",
+                f"Details: {details[:250]}",
+            ],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
@@ -1288,15 +1486,23 @@ async def damaged_part(interaction: discord.Interaction, sr_id: int, details: st
 
 
 @bot.tree.command(name="eta", description="Record an ETA update for your assigned service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID", minutes="Minutes until arrival")
-async def eta(interaction: discord.Interaction, sr_id: int, minutes: int) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", minutes="Minutes until arrival", confirm="Set true to write the update")
+async def eta(interaction: discord.Interaction, sr_id: int, minutes: int, confirm: bool = False) -> None:
+    if minutes < 0:
+        await interaction.response.send_message("ETA minutes must be zero or greater.", ephemeral=True)
+        return
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="eta",
+            sr_id=sr_id,
+            preview_lines=[f"This will record an ETA update for {minutes} minutes."],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
         await interaction.followup.send(_my_tech_help(), ephemeral=True)
-        return
-    if minutes < 0:
-        await interaction.followup.send("ETA minutes must be zero or greater.", ephemeral=True)
         return
 
     result = bot.bluefolder.mark_eta(sr_id, user_id=tech_id, minutes=minutes)
@@ -1319,15 +1525,21 @@ async def eta(interaction: discord.Interaction, sr_id: int, minutes: int) -> Non
 
 
 @bot.tree.command(name="enroute", description="Mark yourself en route and optionally record ETA.")
-@app_commands.describe(sr_id="BlueFolder service request ID", minutes="Optional ETA in minutes")
-async def enroute(interaction: discord.Interaction, sr_id: int, minutes: int | None = None) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", minutes="Optional ETA in minutes", confirm="Set true to write the update")
+async def enroute(interaction: discord.Interaction, sr_id: int, minutes: int | None = None, confirm: bool = False) -> None:
+    if minutes is not None and minutes < 0:
+        await interaction.response.send_message("ETA minutes must be zero or greater.", ephemeral=True)
+        return
+    if not confirm:
+        preview = ["This will mark the service request en route."]
+        if minutes is not None:
+            preview.append(f"It will also record ETA: {minutes} minutes.")
+        await _send_write_preview(interaction, action="enroute", sr_id=sr_id, preview_lines=preview)
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
         await interaction.followup.send(_my_tech_help(), ephemeral=True)
-        return
-    if minutes is not None and minutes < 0:
-        await interaction.followup.send("ETA minutes must be zero or greater.", ephemeral=True)
         return
 
     result = bot.bluefolder.mark_enroute(sr_id, user_id=tech_id, minutes=minutes)
@@ -1351,8 +1563,16 @@ async def enroute(interaction: discord.Interaction, sr_id: int, minutes: int | N
 
 
 @bot.tree.command(name="start", description="Mark yourself started on your assigned service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID")
-async def start(interaction: discord.Interaction, sr_id: int) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", confirm="Set true to write the update")
+async def start(interaction: discord.Interaction, sr_id: int, confirm: bool = False) -> None:
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="start",
+            sr_id=sr_id,
+            preview_lines=["This will mark the service request as started in the workflow log."],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
@@ -1379,8 +1599,16 @@ async def start(interaction: discord.Interaction, sr_id: int) -> None:
 
 
 @bot.tree.command(name="complete", description="Complete your assigned service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID")
-async def complete(interaction: discord.Interaction, sr_id: int) -> None:
+@app_commands.describe(sr_id="BlueFolder service request ID", confirm="Set true to write the update")
+async def complete(interaction: discord.Interaction, sr_id: int, confirm: bool = False) -> None:
+    if not confirm:
+        await _send_write_preview(
+            interaction,
+            action="complete",
+            sr_id=sr_id,
+            preview_lines=["This will mark the service request complete in the workflow log."],
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
