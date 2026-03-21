@@ -33,6 +33,7 @@ class PartsCannonDiscord(commands.Bot):
 
 
 bot = PartsCannonDiscord()
+_DISCORD_MESSAGE_LIMIT = 2000
 
 
 def _my_tech_id(interaction: discord.Interaction) -> int | None:
@@ -67,6 +68,55 @@ def _normalize_name(raw: str | None) -> str:
     return text
 
 
+def _member_name_candidates_from_record(member: dict[str, object]) -> list[str]:
+    candidates: list[str] = []
+    for raw in [member.get("display_name"), member.get("global_name"), member.get("username")]:
+        normalized = _normalize_name(str(raw or ""))
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def _chunk_lines(lines: list[str], *, limit: int = _DISCORD_MESSAGE_LIMIT) -> list[str]:
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + (1 if current else 0)
+        if current and current_len + line_len > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = len(line)
+            continue
+        current.append(line)
+        current_len += line_len
+
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _matching_techs_for_member_record(
+    member: dict[str, object],
+    techs: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    techs_by_name: dict[str, list[dict[str, object]]] = {}
+    for tech in techs:
+        normalized = _normalize_name(str(tech.get("name") or ""))
+        if not normalized:
+            continue
+        techs_by_name.setdefault(normalized, []).append(tech)
+
+    unique_matches: dict[int, dict[str, object]] = {}
+    for candidate in _member_name_candidates_from_record(member):
+        for tech in techs_by_name.get(candidate, []):
+            tech_id = int(tech.get("id") or 0)
+            if tech_id:
+                unique_matches[tech_id] = tech
+    return list(unique_matches.values())
+
+
 def _name_candidates(member: discord.Member) -> list[str]:
     seen: set[str] = set()
     candidates: list[str] = []
@@ -82,13 +132,6 @@ def _build_tech_map_suggestion(
     members: list[dict[str, object]],
     techs: list[dict[str, object]],
 ) -> dict[str, object]:
-    techs_by_name: dict[str, list[dict[str, object]]] = {}
-    for tech in techs:
-        normalized = _normalize_name(str(tech.get("name") or ""))
-        if not normalized:
-            continue
-        techs_by_name.setdefault(normalized, []).append(tech)
-
     suggested_map: dict[str, int] = {}
     matched: list[dict[str, object]] = []
     ambiguous: list[dict[str, object]] = []
@@ -96,24 +139,10 @@ def _build_tech_map_suggestion(
     matched_tech_ids: set[int] = set()
 
     for member in members:
-        member_candidates = []
-        for raw in [member.get("display_name"), member.get("global_name"), member.get("username")]:
-            normalized = _normalize_name(str(raw or ""))
-            if normalized and normalized not in member_candidates:
-                member_candidates.append(normalized)
-
-        possible_matches: list[dict[str, object]] = []
-        for candidate in member_candidates:
-            possible_matches.extend(techs_by_name.get(candidate, []))
-
-        unique_matches: dict[int, dict[str, object]] = {}
-        for tech in possible_matches:
-            tech_id = int(tech.get("id") or 0)
-            if tech_id:
-                unique_matches[tech_id] = tech
+        unique_matches = _matching_techs_for_member_record(member, techs)
 
         if len(unique_matches) == 1:
-            tech = next(iter(unique_matches.values()))
+            tech = unique_matches[0]
             tech_id = int(tech["id"])
             suggested_map[str(member["discord_user_id"])] = tech_id
             matched_tech_ids.add(tech_id)
@@ -134,7 +163,7 @@ def _build_tech_map_suggestion(
                     "username": member.get("username"),
                     "candidate_bluefolder_users": [
                         {"id": int(tech["id"]), "name": tech.get("name")}
-                        for tech in unique_matches.values()
+                        for tech in unique_matches
                     ],
                 }
             )
@@ -214,6 +243,15 @@ def _alert_tech_label(interaction: discord.Interaction) -> str:
     return f"{discord_name} (BlueFolder {tech_id})"
 
 
+def _discord_member_record(interaction: discord.Interaction) -> dict[str, object]:
+    return {
+        "discord_user_id": str(interaction.user.id),
+        "username": interaction.user.name,
+        "display_name": getattr(interaction.user, "display_name", interaction.user.name),
+        "global_name": getattr(interaction.user, "global_name", None),
+    }
+
+
 async def _send_channel_alert(
     interaction: discord.Interaction,
     *,
@@ -261,46 +299,175 @@ async def ping(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="help", description="List Parts Cannon slash commands.")
 async def help_command(interaction: discord.Interaction) -> None:
-    lines = [
-        "/help - show this command list",
-        "/ping - verify bot connectivity",
+    lines = sorted([
+        "/access_issue sr_id details - log an access problem",
+        "/assignments_today tech_id - today's assignments for a tech",
+        "/attachments sr_id - recent service request attachments",
+        "/bf_status - BlueFolder connectivity/config status",
+        "/complete sr_id - complete your assigned job",
+        "/customer sr_id - customer and contact details",
+        "/customer_lookup customer_id - BlueFolder customer lookup",
+        "/damaged_part sr_id details - log a damaged part issue",
+        "/enroute sr_id - mark yourself en route on your assigned job",
+        "/equipment sr_id - customer equipment for the job site",
+        "/eta sr_id minutes - update ETA on your assigned job",
         "/export_member_map scope - export Discord user ids/names for env mapping",
-        "/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs",
-        "/techs - list active BlueFolder technicians",
+        "/help - show this command list",
+        "/history sr_id - broader service request history",
+        "/labor sr_id - labor recorded against the service request",
+        "/materials sr_id - materials recorded against the service request",
+        "/missing_part sr_id details - log a missing part issue",
         "/my_jobs - today's assignments for your mapped tech",
         "/next_job - your next scheduled assignment today",
-        "/assignments_today tech_id - today's assignments for a tech",
-        "/sr sr_id - service request summary",
-        "/customer sr_id - customer and contact details",
-        "/site sr_id - site address and site notes",
-        "/notes sr_id - recent service request notes",
-        "/history sr_id - broader service request history",
-        "/eta sr_id minutes - update ETA on your assigned job",
-        "/enroute sr_id - mark yourself en route on your assigned job",
-        "/start sr_id - mark yourself started on your assigned job",
-        "/complete sr_id - complete your assigned job",
-        "/troubleshoot sr_id - pull recent diagnosis/work context",
         "/no_answer sr_id [details] - log that the customer did not answer",
         "/not_home sr_id [details] - log that the customer was not home",
-        "/access_issue sr_id details - log an access problem",
-        "/missing_part sr_id details - log a missing part issue",
-        "/damaged_part sr_id details - log a damaged part issue",
         "/note_add sr_id text - add an internal service request note",
-        "/attachments sr_id - recent service request attachments",
-        "/equipment sr_id - customer equipment for the job site",
-        "/materials sr_id - materials recorded against the service request",
-        "/labor sr_id - labor recorded against the service request",
-        "/search_customer text - search the BlueFolder customer directory",
+        "/notes sr_id - recent service request notes",
+        "/ping - verify bot connectivity",
         "/search_address text - address search is limited on this BlueFolder tenant",
-        "/user user_id - BlueFolder user lookup",
-        "/customer_lookup customer_id - BlueFolder customer lookup",
-        "/tech_loads - today's assignment counts by tech",
+        "/search_customer text - search the BlueFolder customer directory",
+        "/site sr_id - site address and site notes",
+        "/sr sr_id - service request summary",
+        "/start sr_id - mark yourself started on your assigned job",
+        "/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs",
         "/tech_day tech_id date - assignments for one tech on a specific day",
-        "/who_has_sr sr_id - find who has a service request in the next 14 days",
-        "/bf_status - BlueFolder connectivity/config status",
+        "/tech_loads - today's assignment counts by tech",
+        "/tech_map_status scope - audit mapping coverage for guild/channel members",
+        "/techs - list active BlueFolder technicians",
+        "/troubleshoot sr_id - pull recent diagnosis/work context",
+        "/user user_id - BlueFolder user lookup",
         "/waiver sr_id - generate the prefilled waiver link",
+        "/who_am_i_mapped_to - show your Discord to BlueFolder tech mapping status",
+        "/who_has_sr sr_id - find who has a service request in the next 14 days",
+    ])
+    chunks = _chunk_lines(lines)
+    await interaction.response.send_message(chunks[0], ephemeral=True)
+    for chunk in chunks[1:]:
+        await interaction.followup.send(chunk, ephemeral=True)
+
+
+@bot.tree.command(name="who_am_i_mapped_to", description="Show your Discord to BlueFolder tech mapping status.")
+async def who_am_i_mapped_to(interaction: discord.Interaction) -> None:
+    record = _discord_member_record(interaction)
+    techs = bot.bluefolder.list_active_techs()
+    direct_map = settings.parsed_discord_tech_map.get(str(interaction.user.id))
+    matched_techs = _matching_techs_for_member_record(record, techs)
+
+    lines = [
+        f"Discord user: {record['display_name']} (@{record['username']})",
+        f"Discord ID: {interaction.user.id}",
     ]
+    if direct_map:
+        mapped_tech = next((tech for tech in techs if int(tech.get('id') or 0) == int(direct_map)), None)
+        if mapped_tech:
+            lines.append(f"Mapped via `DISCORD_TECH_MAP`: {mapped_tech['name']} (BlueFolder {mapped_tech['id']})")
+        else:
+            lines.append(f"Mapped via `DISCORD_TECH_MAP`: BlueFolder {direct_map} (not found in active tech list)")
+    else:
+        lines.append("Mapped via `DISCORD_TECH_MAP`: no")
+
+    if len(matched_techs) == 1:
+        tech = matched_techs[0]
+        lines.append(f"Name-based match: {tech['name']} (BlueFolder {tech['id']})")
+    elif len(matched_techs) > 1:
+        lines.append(
+            "Name-based matches: " + ", ".join(f"{tech['name']} ({tech['id']})" for tech in matched_techs[:5])
+        )
+    else:
+        lines.append("Name-based match: none")
+
+    if not direct_map and len(matched_techs) != 1:
+        lines.append("Ask an admin to run `/suggest_tech_map` or update `DISCORD_TECH_MAP`.")
+
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="tech_map_status", description="Show Discord-to-BlueFolder tech mapping coverage.")
+@app_commands.describe(scope="Audit all guild members or just members visible in this channel.")
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="guild", value="guild"),
+        app_commands.Choice(name="channel", value="channel"),
+    ]
+)
+async def tech_map_status(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str],
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to audit tech mappings.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    records = await _collect_members(interaction, scope=scope.value)
+    techs = bot.bluefolder.list_active_techs()
+    active_tech_ids = {int(tech.get("id") or 0) for tech in techs}
+    configured_map = settings.parsed_discord_tech_map
+
+    explicit_mapped = 0
+    auto_resolvable = 0
+    ambiguous = 0
+    unmatched = 0
+    stale_mapped = 0
+    sample_lines: list[str] = []
+
+    for member in records:
+        discord_user_id = str(member["discord_user_id"])
+        mapped_tech_id = configured_map.get(discord_user_id)
+        matches = _matching_techs_for_member_record(member, techs)
+
+        if mapped_tech_id:
+            explicit_mapped += 1
+            if int(mapped_tech_id) not in active_tech_ids:
+                stale_mapped += 1
+                sample_lines.append(
+                    f"stale map: {member.get('display_name') or member.get('username')} -> BlueFolder {mapped_tech_id}"
+                )
+            continue
+        if len(matches) == 1:
+            auto_resolvable += 1
+            if len(sample_lines) < 8:
+                tech = matches[0]
+                sample_lines.append(
+                    f"auto match: {member.get('display_name') or member.get('username')} -> {tech.get('name')} ({tech.get('id')})"
+                )
+        elif len(matches) > 1:
+            ambiguous += 1
+            if len(sample_lines) < 8:
+                sample_lines.append(
+                    f"ambiguous: {member.get('display_name') or member.get('username')}"
+                )
+        else:
+            unmatched += 1
+            if len(sample_lines) < 8:
+                sample_lines.append(
+                    f"unmatched: {member.get('display_name') or member.get('username')}"
+                )
+
+    lines = [
+        f"Scope: {scope.value}",
+        f"Discord members checked: {len(records)}",
+        f"Active BlueFolder techs: {len(techs)}",
+        f"Explicitly mapped in env: {explicit_mapped}",
+        f"Auto-resolvable by exact name: {auto_resolvable}",
+        f"Ambiguous exact-name matches: {ambiguous}",
+        f"Unmatched: {unmatched}",
+    ]
+    if stale_mapped:
+        lines.append(f"Mapped to inactive/missing BlueFolder IDs: {stale_mapped}")
+    if sample_lines:
+        lines.append("")
+        lines.append("Examples:")
+        lines.extend(sample_lines)
+
+    for idx, chunk in enumerate(_chunk_lines(lines)):
+        if idx == 0:
+            await interaction.followup.send(chunk, ephemeral=True)
+        else:
+            await interaction.followup.send(chunk, ephemeral=True)
 
 
 @bot.tree.command(name="export_member_map", description="Export Discord user ids and names to a JSON file.")
