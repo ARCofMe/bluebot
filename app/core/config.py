@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     discord_bot_token: str
     discord_guild_id: int | None = None
     discord_tech_map: str | None = None
+    discord_admin_role_names: str | None = None
     discord_tech_role_names: str | None = None
     discord_dispatcher_role_names: str | None = None
     discord_parts_role_names: str | None = None
@@ -88,6 +89,10 @@ class Settings(BaseSettings):
     @property
     def parsed_discord_tech_roles(self) -> set[str]:
         return self._parse_role_names(self.discord_tech_role_names)
+
+    @property
+    def parsed_discord_admin_roles(self) -> set[str]:
+        return self._parse_role_names(self.discord_admin_role_names)
 
     @property
     def parsed_discord_dispatcher_roles(self) -> set[str]:
