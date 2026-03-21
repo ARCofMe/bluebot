@@ -306,16 +306,28 @@ class BlueFolderService:
             return None
 
     def list_active_techs(self) -> list[dict[str, Any]]:
-        techs = self.client.users.list_active()
-        results = [
-            {
-                "id": int(t.get("id") or t.get("userId")),
-                "name": f"{t.get('firstName', '').strip()} {t.get('lastName', '').strip()}".strip(),
-                "email": t.get("email"),
-            }
-            for t in techs
-            if t.get("id") or t.get("userId")
-        ]
+        try:
+            techs = self.client.users.list_active()
+        except Exception:
+            return []
+
+        results: list[dict[str, Any]] = []
+        for row in techs or []:
+            if not isinstance(row, dict):
+                continue
+            tech_id = self._safe_int(row.get("id") or row.get("userId"))
+            if tech_id is None:
+                continue
+            first_name = str(row.get("firstName") or "").strip()
+            last_name = str(row.get("lastName") or "").strip()
+            name = " ".join(part for part in [first_name, last_name] if part).strip() or f"Tech {tech_id}"
+            results.append(
+                {
+                    "id": tech_id,
+                    "name": name,
+                    "email": row.get("email"),
+                }
+            )
         return sorted(results, key=lambda item: item["name"].casefold())
 
     def get_user(self, user_id: int) -> dict[str, Any]:
@@ -456,12 +468,15 @@ class BlueFolderService:
 
     def _enrich_assignments(self, assignments: list[dict[str, Any]]) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        for a in assignments:
+        for a in assignments or []:
+            if not isinstance(a, dict):
+                continue
             sr_id = a.get("serviceRequestId")
             subject = None
-            if sr_id:
+            sr_lookup_id = self._safe_int(sr_id)
+            if sr_lookup_id is not None:
                 try:
-                    sr_xml = self.client.service_requests.get_by_id(int(sr_id))
+                    sr_xml = self.client.service_requests.get_by_id(sr_lookup_id)
                     sr = sr_xml.find(".//serviceRequest")
                     if sr is not None:
                         subject = sr.findtext("description") or sr.findtext("subject")
@@ -1074,7 +1089,10 @@ class BlueFolderService:
         if response is None:
             return {"ok": False, "error": "Empty BlueFolder response."}
         if getattr(response, "attrib", {}).get("status") == "fail":
-            error = response.findtext(".//error") or "BlueFolder rejected the request."
+            try:
+                error = response.findtext(".//error") or "BlueFolder rejected the request."
+            except Exception:
+                error = "BlueFolder rejected the request."
             return {"ok": False, "error": error}
         return {"ok": True}
 

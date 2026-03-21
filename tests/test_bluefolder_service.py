@@ -65,6 +65,27 @@ def test_resolve_tech_id_returns_none_for_ambiguous_name(monkeypatch):
     assert svc.resolve_tech_id(7, ["Mike Smith"]) is None
 
 
+def test_list_active_techs_skips_invalid_rows_and_falls_back_name():
+    svc = _service()
+    svc.client = SimpleNamespace(
+        users=SimpleNamespace(
+            list_active=lambda: [
+                {"id": "11", "firstName": "Mike", "lastName": "Smith", "email": "mike@example.com"},
+                {"userId": "12"},
+                {"id": "abc", "firstName": "Bad"},
+                None,
+            ]
+        )
+    )
+
+    techs = svc.list_active_techs()
+
+    assert techs == [
+        {"id": 11, "name": "Mike Smith", "email": "mike@example.com"},
+        {"id": 12, "name": "Tech 12", "email": None},
+    ]
+
+
 def test_get_assignments_for_user_day_uses_cache(monkeypatch):
     svc = _service()
     rows = [
@@ -80,6 +101,36 @@ def test_get_assignments_for_user_day_uses_cache(monkeypatch):
 
     assert first == second == [{"assignment_id": 1, "service_request_id": 222}]
     assert len(assignments.calls) == 1
+
+
+def test_enrich_assignments_skips_bad_sr_lookup_and_non_dict_rows():
+    svc = _service()
+    sr_xml = ET.fromstring(
+        """
+        <response>
+          <serviceRequest>
+            <description>Reach-in cooler warm</description>
+          </serviceRequest>
+        </response>
+        """
+    )
+    svc.client = SimpleNamespace(
+        service_requests=SimpleNamespace(get_by_id=lambda sr_id: sr_xml)
+    )
+
+    rows = svc._enrich_assignments(
+        [
+            {"assignmentId": 1, "serviceRequestId": "bad-id", "start": "2026-03-21T08:00:00", "end": "2026-03-21T09:00:00", "isComplete": False},
+            {"assignmentId": 2, "serviceRequestId": "222", "start": "2026-03-21T09:00:00", "end": "2026-03-21T10:00:00", "isComplete": True},
+            None,
+        ]
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["assignment_id"] == 1
+    assert rows[0]["subject"] == "Service Request"
+    assert rows[1]["assignment_id"] == 2
+    assert rows[1]["subject"] == "Reach-in cooler warm"
 
 
 def test_workflow_targets_follow_settings(monkeypatch):
@@ -150,6 +201,20 @@ def test_mark_enroute_returns_eta_failure(monkeypatch):
 
     assert result == {"ok": False, "error": "write failed"}
     assert len(calls) == 2
+
+
+def test_bluefolder_ok_handles_fail_response_without_readable_error():
+    svc = _service()
+
+    class FailingResponse:
+        attrib = {"status": "fail"}
+
+        def findtext(self, pattern):
+            raise RuntimeError("bad xml")
+
+    result = svc._bluefolder_ok(FailingResponse())
+
+    assert result == {"ok": False, "error": "BlueFolder rejected the request."}
 
 
 def test_get_service_request_parses_customer_location_and_equipment(monkeypatch):
