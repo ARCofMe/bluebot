@@ -110,6 +110,10 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/sr_brief sr_id - compact dispatch summary for a service request",
             "/today_board - today's tech load snapshot for dispatch",
         ],
+        "Parts": [
+            "/parts_notes sr_id - recent parts-related notes for a service request",
+            "/parts_brief sr_id - compact parts-facing summary for a service request",
+        ],
         "Mapping And Admin": [
             "/export_member_map scope - export Discord user ids/names for env mapping",
             "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
@@ -317,6 +321,14 @@ def _require_dispatch_access(interaction: discord.Interaction) -> bool:
     if _require_guild_admin(interaction):
         return True
     return _has_configured_role(interaction, settings.parsed_discord_dispatcher_roles)
+
+
+def _require_parts_access(interaction: discord.Interaction) -> bool:
+    if _require_guild_admin(interaction):
+        return True
+    if _has_configured_role(interaction, settings.parsed_discord_dispatcher_roles):
+        return True
+    return _has_configured_role(interaction, settings.parsed_discord_parts_roles)
 
 
 def _role_labels(interaction: discord.Interaction) -> list[str]:
@@ -975,6 +987,78 @@ async def sr_brief(interaction: discord.Interaction, sr_id: int) -> None:
             lines.append(f"Latest text: {latest['text'][:200]}")
 
     await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="parts_brief", description="Show a compact parts-facing summary for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def parts_brief(interaction: discord.Interaction, sr_id: int) -> None:
+    if not _require_parts_access(interaction):
+        await interaction.response.send_message(
+            "You need a configured parts/dispatcher role or `Manage Server` permission for this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    item = bot.bluefolder.get_service_request(sr_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
+    if not item:
+        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+        return
+
+    part_notes = bot.bluefolder.get_recent_part_notes(sr_id, limit=3)
+    lines = [
+        f"SR {item['id']}",
+        f"Subject: {item.get('subject') or 'n/a'}",
+        f"Customer: {item.get('customer_name') or 'n/a'}",
+        f"Address: {item.get('address') or 'n/a'}",
+    ]
+    if part_notes:
+        latest = part_notes[0]
+        lines.append(
+            f"Latest parts note: {(latest.get('entryType') or 'Note')} | {latest.get('dateCreated') or 'unknown'}"
+        )
+        if latest.get("text"):
+            lines.append(f"Latest text: {latest['text'][:220]}")
+    else:
+        lines.append("No recent parts-related notes found.")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="parts_notes", description="Show recent parts-related notes for a service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def parts_notes(interaction: discord.Interaction, sr_id: int) -> None:
+    if not _require_parts_access(interaction):
+        await interaction.response.send_message(
+            "You need a configured parts/dispatcher role or `Manage Server` permission for this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    notes = bot.bluefolder.get_recent_part_notes(sr_id, limit=6)
+    if not notes:
+        await interaction.followup.send(f"No recent parts-related notes found for `{sr_id}`.", ephemeral=True)
+        return
+
+    blocks = []
+    for idx, note in enumerate(notes, start=1):
+        blocks.append(
+            "\n".join(
+                [
+                    f"**{idx}. {(note.get('entryType') or 'Note')}**",
+                    f"`{note.get('dateCreated') or 'unknown'}` by **{note.get('author') or 'Unknown'}**",
+                    note.get("text") or "",
+                ]
+            )
+        )
+    await interaction.followup.send("\n\n---\n\n".join(blocks), ephemeral=True)
 
 
 @bot.tree.command(name="next_job", description="Show your next scheduled assignment today.")

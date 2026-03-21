@@ -701,6 +701,21 @@ class BlueFolderService:
         notes = sorted(notes, key=lambda item: item.get("dateCreated") or "", reverse=True)
         return notes[:limit]
 
+    def get_recent_part_notes(
+        self,
+        sr_id: int,
+        *,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        notes = self.get_service_request_notes(sr_id, limit=max(limit * 3, limit))
+        filtered = [
+            note
+            for note in notes
+            if "missing part" in str(note.get("text") or "").casefold()
+            or "damaged part" in str(note.get("text") or "").casefold()
+        ]
+        return filtered[:limit]
+
     def get_service_request_history(self, sr_id: int, limit: int = 12) -> list[dict[str, Any]]:
         """Return a broader history feed than `/notes`."""
         return self.get_service_request_notes(sr_id, limit=limit)
