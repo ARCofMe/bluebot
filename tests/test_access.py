@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.bot import client
 
 
@@ -25,6 +27,9 @@ class DummyResponse:
 
     async def defer(self, ephemeral=False):
         self.deferred = True
+
+    def is_done(self):
+        return self.deferred or bool(self.messages)
 
 
 class DummyFollowup:
@@ -186,3 +191,37 @@ def test_export_today_board_handles_export_write_failure(monkeypatch):
     assert interaction.response.deferred is True
     assert interaction.followup.messages
     assert interaction.followup.messages[0]["content"] == "Could not write export file: disk full"
+
+
+def test_handle_app_command_error_uses_initial_response_when_not_done():
+    interaction = _interaction()
+    interaction.command = SimpleNamespace(name="ping")
+
+    asyncio.run(client._handle_app_command_error(interaction, ValueError("boom")))
+
+    assert interaction.response.messages
+    assert interaction.response.messages[0]["content"] == "Unexpected error while handling that command."
+    assert not interaction.followup.messages
+
+
+def test_handle_app_command_error_uses_followup_after_defer():
+    interaction = _interaction()
+    interaction.command = SimpleNamespace(name="today_board")
+    interaction.response.deferred = True
+
+    asyncio.run(client._handle_app_command_error(interaction, RuntimeError("BlueFolder timeout")))
+
+    assert not interaction.response.messages
+    assert interaction.followup.messages
+    assert interaction.followup.messages[0]["content"] == "BlueFolder timeout"
+
+
+def test_setup_hook_logs_and_reraises_sync_failure(monkeypatch):
+    async def boom(guild=None):
+        raise RuntimeError("sync failed")
+
+    monkeypatch.setattr(client.settings, "discord_guild_id", None)
+    monkeypatch.setattr(client.bot.tree, "sync", boom)
+
+    with pytest.raises(RuntimeError, match="sync failed"):
+        asyncio.run(client.bot.setup_hook())

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 import json
+import logging
 import re
 
 import discord
@@ -13,6 +14,9 @@ from discord.ext import commands
 
 from app.core.config import export_output_path, settings
 from app.services.bluefolder_service import BlueFolderService
+
+
+logger = logging.getLogger(__name__)
 
 
 class PartsCannonDiscord(commands.Bot):
@@ -25,12 +29,19 @@ class PartsCannonDiscord(commands.Bot):
         self.bluefolder = BlueFolderService()
 
     async def setup_hook(self) -> None:
-        if settings.discord_guild_id:
-            guild = discord.Object(id=settings.discord_guild_id)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-        else:
-            await self.tree.sync()
+        try:
+            if settings.discord_guild_id:
+                guild = discord.Object(id=settings.discord_guild_id)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+            else:
+                await self.tree.sync()
+        except Exception:
+            logger.exception(
+                "Discord command sync failed.",
+                extra={"guild_id": settings.discord_guild_id},
+            )
+            raise
 
 
 bot = PartsCannonDiscord()
@@ -231,6 +242,19 @@ async def _send_response_text(
         await interaction.followup.send(chunk, ephemeral=ephemeral)
 
 
+def _response_is_done(interaction: discord.Interaction) -> bool:
+    response = getattr(interaction, "response", None)
+    if response is None:
+        return False
+    is_done = getattr(response, "is_done", None)
+    if callable(is_done):
+        try:
+            return bool(is_done())
+        except Exception:
+            return False
+    return bool(getattr(response, "deferred", False))
+
+
 async def _send_followup_text(
     interaction: discord.Interaction,
     text: str,
@@ -248,6 +272,33 @@ async def _send_followup_lines(
     ephemeral: bool = True,
 ) -> None:
     await _send_followup_text(interaction, "\n".join(lines), ephemeral=ephemeral)
+
+
+async def _send_error_response(
+    interaction: discord.Interaction,
+    text: str,
+    *,
+    ephemeral: bool = True,
+) -> None:
+    if _response_is_done(interaction):
+        await _send_followup_text(interaction, text, ephemeral=ephemeral)
+        return
+    await _send_response_text(interaction, text, ephemeral=ephemeral)
+
+
+def _unwrap_app_command_error(error: Exception) -> Exception:
+    original = getattr(error, "original", None)
+    if isinstance(original, Exception):
+        return original
+    return error
+
+
+def _public_error_text(error: Exception) -> str:
+    if isinstance(error, RuntimeError):
+        message = str(error).strip()
+        if message:
+            return message
+    return "Unexpected error while handling that command."
 
 
 def _has_access(interaction: discord.Interaction, access: str) -> bool:
@@ -668,6 +719,26 @@ async def _send_channel_alert(
 @bot.tree.command(description="Basic bot connectivity check.")
 async def ping(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("pong", ephemeral=True)
+
+
+async def _handle_app_command_error(
+    interaction: discord.Interaction,
+    error: Exception,
+) -> None:
+    root_error = _unwrap_app_command_error(error)
+    logger.exception(
+        "Slash command failed.",
+        exc_info=root_error,
+        extra={
+            "command_name": getattr(getattr(interaction, "command", None), "name", None),
+            "user_id": getattr(getattr(interaction, "user", None), "id", None),
+            "guild_id": getattr(interaction, "guild_id", None),
+        },
+    )
+    await _send_error_response(interaction, _public_error_text(root_error), ephemeral=True)
+
+
+bot.tree.on_error = _handle_app_command_error
 
 
 @bot.tree.command(name="help", description="List Parts Cannon slash commands.")
