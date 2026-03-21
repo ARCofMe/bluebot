@@ -98,7 +98,7 @@ def _chunk_lines(lines: list[str], *, limit: int = _DISCORD_MESSAGE_LIMIT) -> li
     return chunks
 
 
-def _help_lines() -> list[str]:
+def _help_sections() -> list[tuple[str, list[str]]]:
     sections = {
         "General": [
             "/bf_status - BlueFolder connectivity/config status",
@@ -115,7 +115,10 @@ def _help_lines() -> list[str]:
         ],
         "Tech Schedules": [
             "/assignments_today tech_id - today's assignments for a tech",
+            "/my_day date - show your assignments for a specific YYYY-MM-DD date",
             "/my_jobs - today's assignments for your mapped tech",
+            "/my_status - show your mapping, today's job count, and next assignment",
+            "/my_week - show your assignment counts for the next 7 days",
             "/next_job - your next scheduled assignment today",
             "/tech_day tech_id date - assignments for one tech on a specific day",
             "/tech_loads - today's assignment counts by tech",
@@ -151,13 +154,7 @@ def _help_lines() -> list[str]:
             "/start sr_id - mark yourself started on your assigned job",
         ],
     }
-
-    lines = ["**Parts Cannon Commands**"]
-    for title in sorted(sections):
-        lines.append("")
-        lines.append(f"**{title}**")
-        lines.extend(sorted(sections[title]))
-    return lines
+    return [(title, sorted(sections[title])) for title in sorted(sections)]
 
 
 def _matching_techs_for_member_record(
@@ -412,10 +409,21 @@ async def ping(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="help", description="List Parts Cannon slash commands.")
 async def help_command(interaction: discord.Interaction) -> None:
-    chunks = _chunk_lines(_help_lines())
-    await interaction.response.send_message(chunks[0], ephemeral=True)
-    for chunk in chunks[1:]:
-        await interaction.followup.send(chunk, ephemeral=True)
+    sections = _help_sections()
+    first_message = "\n".join(
+        [
+            "**Parts Cannon Commands**",
+            "",
+            f"**{sections[0][0]}**",
+            *sections[0][1],
+        ]
+    )
+    await interaction.response.send_message(first_message, ephemeral=True)
+    for title, commands_in_section in sections[1:]:
+        await interaction.followup.send(
+            "\n".join([f"**{title}**", *commands_in_section]),
+            ephemeral=True,
+        )
 
 
 @bot.tree.command(name="who_am_i_mapped_to", description="Show your Discord to BlueFolder tech mapping status.")
@@ -715,6 +723,118 @@ async def my_jobs(interaction: discord.Interaction) -> None:
         sr_id = item.get("service_request_id") or "?"
         subject = item.get("subject") or "Service Request"
         lines.append(f"{idx}. {start} - SR {sr_id} - {subject}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="my_day", description="Show your assignments for a specific day.")
+@app_commands.describe(date_iso="Date in YYYY-MM-DD format")
+async def my_day(interaction: discord.Interaction, date_iso: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+
+    day = _parse_iso_date(date_iso)
+    if not day:
+        await interaction.followup.send("Date must be in YYYY-MM-DD format.", ephemeral=True)
+        return
+
+    assignments = bot.bluefolder.get_assignments_for_user_day(tech_id, day)
+    if not assignments:
+        await interaction.followup.send(f"No assignments found for you on `{day.isoformat()}`.", ephemeral=True)
+        return
+
+    lines = [f"Assignments for {day.isoformat()}:"]
+    for idx, item in enumerate(assignments[:15], start=1):
+        start = item.get("start_display") or item.get("start") or "unscheduled"
+        sr_id = item.get("service_request_id") or "?"
+        subject = item.get("subject") or "Service Request"
+        lines.append(f"{idx}. {start} - SR {sr_id} - {subject}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="my_status", description="Show your mapping, today's job count, and next assignment.")
+async def my_status(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    record = _discord_member_record(interaction)
+    techs = bot.bluefolder.list_active_techs()
+    direct_map = settings.parsed_discord_tech_map.get(str(interaction.user.id))
+    matched_techs = _matching_techs_for_member_record(record, techs)
+    tech_id = _my_tech_id(interaction)
+
+    lines = [
+        f"Discord user: {record['display_name']} (@{record['username']})",
+        f"Discord ID: {interaction.user.id}",
+    ]
+    if direct_map:
+        mapped_tech = next((tech for tech in techs if int(tech.get('id') or 0) == int(direct_map)), None)
+        if mapped_tech:
+            lines.append(f"Mapped via env: {mapped_tech['name']} (BlueFolder {mapped_tech['id']})")
+        else:
+            lines.append(f"Mapped via env: BlueFolder {direct_map} (not found in active tech list)")
+    elif len(matched_techs) == 1:
+        tech = matched_techs[0]
+        lines.append(f"Mapped by exact name: {tech['name']} (BlueFolder {tech['id']})")
+    elif len(matched_techs) > 1:
+        lines.append("Mapped by exact name: ambiguous")
+    else:
+        lines.append("Mapped: no")
+
+    if not tech_id:
+        lines.append("Today's assignments: unavailable until your Discord user maps to a BlueFolder tech.")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        return
+
+    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    lines.append(f"Today's assignments: {len(assignments)}")
+    if assignments:
+        next_item = assignments[0]
+        lines.extend(
+            [
+                f"Next SR: {next_item.get('service_request_id') or '?'}",
+                f"Next start: {next_item.get('start_display') or next_item.get('start') or 'unscheduled'}",
+                f"Next subject: {next_item.get('subject') or 'Service Request'}",
+            ]
+        )
+    else:
+        lines.append("Next assignment: none scheduled today")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="my_week", description="Show your assignment counts for the next 7 days.")
+async def my_week(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+
+    start_day = date.today()
+    end_day = start_day + timedelta(days=6)
+    assignments = bot.bluefolder.get_assignments_for_user_window(
+        tech_id,
+        start_day=start_day,
+        end_day=end_day,
+    )
+    by_day: dict[str, list[dict[str, object]]] = {}
+    for item in assignments:
+        raw_start = str(item.get("start") or "")
+        day_key = raw_start[:10] if len(raw_start) >= 10 else start_day.isoformat()
+        by_day.setdefault(day_key, []).append(item)
+
+    lines = [f"Assignments for {start_day.isoformat()} through {end_day.isoformat()}:"]
+    for offset in range(7):
+        day = start_day + timedelta(days=offset)
+        bucket = by_day.get(day.isoformat(), [])
+        if bucket:
+            first = bucket[0]
+            lines.append(
+                f"{day.isoformat()}: {len(bucket)} assignment(s), first at {first.get('start_display') or first.get('start') or 'unscheduled'}"
+            )
+        else:
+            lines.append(f"{day.isoformat()}: 0 assignments")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
