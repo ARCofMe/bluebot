@@ -107,6 +107,7 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/waiver sr_id - generate the prefilled waiver link",
         ],
         "Dispatch": [
+            "/export_today_board - write today's dispatch board snapshot to JSON",
             "/next_openings - show which techs are lightest today",
             "/sr_brief sr_id - compact dispatch summary for a service request",
             "/today_board - today's tech load snapshot for dispatch",
@@ -117,6 +118,7 @@ def _help_sections() -> list[tuple[str, list[str]]]:
         ],
         "Mapping And Admin": [
             "/export_member_map scope - export Discord user ids/names for env mapping",
+            "/export_mapping_audit scope - write mapping/role audit snapshot to JSON",
             "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
             "/mapping_drift scope - audit role and mapping drift across members",
             "/role_audit scope - summarize configured Discord role coverage",
@@ -451,6 +453,13 @@ async def _send_write_preview(
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+def _write_json_export(stem_suffix: str, payload: dict[str, object]) -> str:
+    path = export_output_path(stem_suffix=stem_suffix)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return str(path)
+
+
 def _job_packet_lines(
     item: dict[str, object],
     *,
@@ -772,6 +781,66 @@ async def role_audit(
         f"No configured roles: {no_configured_role}",
     ]
     await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="export_mapping_audit", description="Write a mapping and role audit snapshot to JSON.")
+@app_commands.describe(scope="Audit all guild members or just members visible in this channel.")
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="guild", value="guild"),
+        app_commands.Choice(name="channel", value="channel"),
+    ]
+)
+async def export_mapping_audit(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str],
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to export mapping audits.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    records = await _collect_members(interaction, scope=scope.value)
+    techs = bot.bluefolder.list_active_techs()
+    active_tech_ids = {int(tech.get("id") or 0) for tech in techs}
+    configured_map = settings.parsed_discord_tech_map
+
+    payload = {
+        "guild_id": str(interaction.guild_id or ""),
+        "scope": scope.value,
+        "member_count": len(records),
+        "tech_role_matches": sum(1 for record in records if _record_has_configured_role(record, settings.parsed_discord_tech_roles)),
+        "dispatcher_role_matches": sum(1 for record in records if _record_has_configured_role(record, settings.parsed_discord_dispatcher_roles)),
+        "parts_role_matches": sum(1 for record in records if _record_has_configured_role(record, settings.parsed_discord_parts_roles)),
+        "members": [],
+    }
+
+    for record in records:
+        discord_user_id = str(record["discord_user_id"])
+        exact_matches = _matching_techs_for_member_record(record, techs)
+        near_matches = _near_match_techs_for_member_record(record, techs)
+        mapped_tech_id = configured_map.get(discord_user_id)
+        payload["members"].append(
+            {
+                **record,
+                "env_mapped_tech_id": mapped_tech_id,
+                "env_map_is_active": bool(mapped_tech_id and int(mapped_tech_id) in active_tech_ids),
+                "has_tech_role": _record_has_configured_role(record, settings.parsed_discord_tech_roles),
+                "has_dispatcher_role": _record_has_configured_role(record, settings.parsed_discord_dispatcher_roles),
+                "has_parts_role": _record_has_configured_role(record, settings.parsed_discord_parts_roles),
+                "exact_bluefolder_matches": exact_matches,
+                "near_bluefolder_matches": near_matches,
+            }
+        )
+
+    export_path = _write_json_export("_mapping_audit", payload)
+    await interaction.followup.send(
+        f"Wrote mapping audit snapshot to `{export_path}`.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="mapping_drift", description="Audit role and mapping drift across members.")
@@ -1111,6 +1180,32 @@ async def my_next_packet(interaction: discord.Interaction) -> None:
     notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
     await interaction.followup.send(
         "\n".join(_job_packet_lines(item, notes=notes, assignment=assignment)),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="export_today_board", description="Write today's dispatch board snapshot to JSON.")
+async def export_today_board(interaction: discord.Interaction) -> None:
+    if not _require_dispatch_access(interaction):
+        await interaction.response.send_message(
+            "You need a configured dispatcher role or `Manage Server` permission for this command.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    loads = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=50)
+    payload = {
+        "guild_id": str(interaction.guild_id or ""),
+        "date": date.today().isoformat(),
+        "tech_count": len(loads),
+        "idle_count": sum(1 for item in loads if int(item.get("assignment_count") or 0) == 0),
+        "heavy_count": sum(1 for item in loads if int(item.get("assignment_count") or 0) >= 5),
+        "loads": loads,
+    }
+    export_path = _write_json_export("_today_board", payload)
+    await interaction.followup.send(
+        f"Wrote today's board snapshot to `{export_path}`.",
         ephemeral=True,
     )
 
