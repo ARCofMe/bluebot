@@ -97,6 +97,68 @@ def _chunk_lines(lines: list[str], *, limit: int = _DISCORD_MESSAGE_LIMIT) -> li
     return chunks
 
 
+def _help_lines() -> list[str]:
+    sections = {
+        "General": [
+            "/bf_status - BlueFolder connectivity/config status",
+            "/help - show this command list",
+            "/ping - verify bot connectivity",
+            "/waiver sr_id - generate the prefilled waiver link",
+        ],
+        "Mapping And Admin": [
+            "/export_member_map scope - export Discord user ids/names for env mapping",
+            "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
+            "/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs",
+            "/tech_map_status scope - audit mapping coverage for guild/channel members",
+            "/who_am_i_mapped_to - show your Discord to BlueFolder tech mapping status",
+        ],
+        "Tech Schedules": [
+            "/assignments_today tech_id - today's assignments for a tech",
+            "/my_jobs - today's assignments for your mapped tech",
+            "/next_job - your next scheduled assignment today",
+            "/tech_day tech_id date - assignments for one tech on a specific day",
+            "/tech_loads - today's assignment counts by tech",
+            "/techs - list active BlueFolder technicians",
+            "/who_has_sr sr_id - find who has a service request in the next 14 days",
+        ],
+        "Service Requests": [
+            "/attachments sr_id - recent service request attachments",
+            "/customer sr_id - customer and contact details",
+            "/equipment sr_id - customer equipment for the job site",
+            "/history sr_id - broader service request history",
+            "/labor sr_id - labor recorded against the service request",
+            "/materials sr_id - materials recorded against the service request",
+            "/notes sr_id - recent service request notes",
+            "/search_address text - address search is limited on this BlueFolder tenant",
+            "/search_customer text - search the BlueFolder customer directory",
+            "/site sr_id - site address and site notes",
+            "/sr sr_id - service request summary",
+            "/troubleshoot sr_id - pull recent diagnosis/work context",
+            "/user user_id - BlueFolder user lookup",
+            "/customer_lookup customer_id - BlueFolder customer lookup",
+        ],
+        "Workflow Updates": [
+            "/access_issue sr_id details - log an access problem",
+            "/complete sr_id - complete your assigned job",
+            "/damaged_part sr_id details - log a damaged part issue",
+            "/enroute sr_id - mark yourself en route on your assigned job",
+            "/eta sr_id minutes - update ETA on your assigned job",
+            "/missing_part sr_id details - log a missing part issue",
+            "/no_answer sr_id [details] - log that the customer did not answer",
+            "/not_home sr_id [details] - log that the customer was not home",
+            "/note_add sr_id text - add an internal service request note",
+            "/start sr_id - mark yourself started on your assigned job",
+        ],
+    }
+
+    lines = ["**Parts Cannon Commands**"]
+    for title in sorted(sections):
+        lines.append("")
+        lines.append(f"**{title}**")
+        lines.extend(sorted(sections[title]))
+    return lines
+
+
 def _matching_techs_for_member_record(
     member: dict[str, object],
     techs: list[dict[str, object]],
@@ -308,49 +370,7 @@ async def ping(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="help", description="List Parts Cannon slash commands.")
 async def help_command(interaction: discord.Interaction) -> None:
-    lines = sorted([
-        "/access_issue sr_id details - log an access problem",
-        "/assignments_today tech_id - today's assignments for a tech",
-        "/attachments sr_id - recent service request attachments",
-        "/bf_status - BlueFolder connectivity/config status",
-        "/complete sr_id - complete your assigned job",
-        "/customer sr_id - customer and contact details",
-        "/customer_lookup customer_id - BlueFolder customer lookup",
-        "/damaged_part sr_id details - log a damaged part issue",
-        "/enroute sr_id - mark yourself en route on your assigned job",
-        "/equipment sr_id - customer equipment for the job site",
-        "/eta sr_id minutes - update ETA on your assigned job",
-        "/export_member_map scope - export Discord user ids/names for env mapping",
-        "/help - show this command list",
-        "/history sr_id - broader service request history",
-        "/labor sr_id - labor recorded against the service request",
-        "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
-        "/materials sr_id - materials recorded against the service request",
-        "/missing_part sr_id details - log a missing part issue",
-        "/my_jobs - today's assignments for your mapped tech",
-        "/next_job - your next scheduled assignment today",
-        "/no_answer sr_id [details] - log that the customer did not answer",
-        "/not_home sr_id [details] - log that the customer was not home",
-        "/note_add sr_id text - add an internal service request note",
-        "/notes sr_id - recent service request notes",
-        "/ping - verify bot connectivity",
-        "/search_address text - address search is limited on this BlueFolder tenant",
-        "/search_customer text - search the BlueFolder customer directory",
-        "/site sr_id - site address and site notes",
-        "/sr sr_id - service request summary",
-        "/start sr_id - mark yourself started on your assigned job",
-        "/suggest_tech_map scope - suggest DISCORD_TECH_MAP from Discord names vs BlueFolder techs",
-        "/tech_day tech_id date - assignments for one tech on a specific day",
-        "/tech_loads - today's assignment counts by tech",
-        "/tech_map_status scope - audit mapping coverage for guild/channel members",
-        "/techs - list active BlueFolder technicians",
-        "/troubleshoot sr_id - pull recent diagnosis/work context",
-        "/user user_id - BlueFolder user lookup",
-        "/waiver sr_id - generate the prefilled waiver link",
-        "/who_am_i_mapped_to - show your Discord to BlueFolder tech mapping status",
-        "/who_has_sr sr_id - find who has a service request in the next 14 days",
-    ])
-    chunks = _chunk_lines(lines)
+    chunks = _chunk_lines(_help_lines())
     await interaction.response.send_message(chunks[0], ephemeral=True)
     for chunk in chunks[1:]:
         await interaction.followup.send(chunk, ephemeral=True)
