@@ -269,3 +269,42 @@ def test_suggest_tech_map_handles_env_export_write_failure(monkeypatch):
     assert interaction.response.deferred is True
     assert interaction.followup.messages
     assert interaction.followup.messages[0]["content"] == "Could not write export file: disk full"
+
+
+def test_send_channel_alert_uses_parts_label_when_channel_unavailable(monkeypatch):
+    interaction = _interaction()
+    monkeypatch.setattr(client.bot, "get_channel", lambda channel_id: None)
+
+    async def fetch_channel(channel_id):
+        return None
+
+    monkeypatch.setattr(client.bot, "fetch_channel", fetch_channel)
+
+    result = asyncio.run(
+        client._send_channel_alert(
+            interaction,
+            title="Missing Part",
+            sr_id=12345,
+            note_text="Missing compressor",
+            channel_id=999,
+            enabled=True,
+            channel_label="Parts",
+        )
+    )
+
+    assert result == "Parts alert channel could not be loaded."
+
+
+def test_sr_handles_bluefolder_exception_with_followup(monkeypatch):
+    class FailingBlueFolder:
+        def get_service_request(self, sr_id):
+            raise RuntimeError("timeout")
+
+    monkeypatch.setattr(client.bot, "bluefolder", FailingBlueFolder())
+    interaction = _interaction()
+
+    asyncio.run(client.sr(interaction, sr_id=12345))
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages
+    assert interaction.followup.messages[0]["content"] == "BlueFolder lookup failed for `12345`: timeout"

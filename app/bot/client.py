@@ -274,6 +274,45 @@ async def _send_followup_lines(
     await _send_followup_text(interaction, "\n".join(lines), ephemeral=ephemeral)
 
 
+async def _run_bluefolder_read(
+    interaction: discord.Interaction,
+    error_prefix: str,
+    func,
+    *args,
+    **kwargs,
+):
+    try:
+        return func(*args, **kwargs)
+    except Exception as exc:
+        await _send_followup_text(interaction, f"{error_prefix}: {exc}", ephemeral=True)
+        return None
+
+
+async def _load_service_request_or_reply(
+    interaction: discord.Interaction,
+    sr_id: int,
+) -> dict[str, object] | None:
+    item = await _run_bluefolder_read(
+        interaction,
+        f"BlueFolder lookup failed for `{sr_id}`",
+        bot.bluefolder.get_service_request,
+        sr_id,
+    )
+    if item is None:
+        return None
+    if item.get("error"):
+        await _send_followup_text(
+            interaction,
+            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return None
+    if not item:
+        await _send_followup_text(interaction, f"Service request `{sr_id}` not found.", ephemeral=True)
+        return None
+    return item
+
+
 async def _send_error_response(
     interaction: discord.Interaction,
     text: str,
@@ -706,6 +745,7 @@ async def _send_channel_alert(
     note_text: str,
     channel_id: int | None,
     enabled: bool,
+    channel_label: str = "Dispatcher",
     customer_name: str | None = None,
     address: str | None = None,
 ) -> str | None:
@@ -719,7 +759,9 @@ async def _send_channel_alert(
         try:
             channel = await bot.fetch_channel(channel_id)
         except Exception:
-            return "Dispatcher alert channel could not be loaded."
+            return f"{channel_label} alert channel could not be loaded."
+    if channel is None or not hasattr(channel, "send"):
+        return f"{channel_label} alert channel could not be loaded."
 
     lines = [
         f"**{title}**",
@@ -734,8 +776,8 @@ async def _send_channel_alert(
     try:
         await channel.send("\n".join(lines))
     except Exception:
-        return "Dispatcher alert could not be sent."
-    return f"Dispatcher alert sent to <#{channel_id}>."
+        return f"{channel_label} alert could not be sent."
+    return f"{channel_label} alert sent to <#{channel_id}>."
 
 
 @bot.tree.command(description="Basic bot connectivity check.")
@@ -1235,7 +1277,13 @@ async def suggest_tech_map(
 @bot.tree.command(name="techs", description="List active BlueFolder technicians.")
 async def techs(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
-    tech_list = bot.bluefolder.list_active_techs()
+    tech_list = await _run_bluefolder_read(
+        interaction,
+        "Could not load active technicians",
+        bot.bluefolder.list_active_techs,
+    )
+    if tech_list is None:
+        return
     if not tech_list:
         await interaction.followup.send("No active technicians found.", ephemeral=True)
         return
@@ -1251,7 +1299,14 @@ async def my_jobs(interaction: discord.Interaction) -> None:
         return
     await interaction.response.defer(ephemeral=True)
 
-    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        "Could not load your assignments",
+        bot.bluefolder.get_assignments_for_user_today,
+        tech_id,
+    )
+    if assignments is None:
+        return
     if not assignments:
         await interaction.followup.send("No assignments found for you today.", ephemeral=True)
         return
@@ -1278,7 +1333,15 @@ async def my_day(interaction: discord.Interaction, date_iso: str) -> None:
         await interaction.followup.send("Date must be in YYYY-MM-DD format.", ephemeral=True)
         return
 
-    assignments = bot.bluefolder.get_assignments_for_user_day(tech_id, day)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        f"Could not load assignments for `{day.isoformat()}`",
+        bot.bluefolder.get_assignments_for_user_day,
+        tech_id,
+        day,
+    )
+    if assignments is None:
+        return
     if not assignments:
         await interaction.followup.send(f"No assignments found for you on `{day.isoformat()}`.", ephemeral=True)
         return
@@ -1296,7 +1359,13 @@ async def my_day(interaction: discord.Interaction, date_iso: str) -> None:
 async def my_status(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
     record = _discord_member_record(interaction)
-    techs = bot.bluefolder.list_active_techs()
+    techs = await _run_bluefolder_read(
+        interaction,
+        "Could not load active technicians",
+        bot.bluefolder.list_active_techs,
+    )
+    if techs is None:
+        return
     direct_map = settings.parsed_discord_tech_map.get(str(interaction.user.id))
     matched_techs = _matching_techs_for_member_record(record, techs)
     tech_id = _my_tech_id(interaction)
@@ -1327,7 +1396,14 @@ async def my_status(interaction: discord.Interaction) -> None:
         await _send_followup_lines(interaction, lines, ephemeral=True)
         return
 
-    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        "Could not load your assignments",
+        bot.bluefolder.get_assignments_for_user_today,
+        tech_id,
+    )
+    if assignments is None:
+        return
     lines.append(f"Today's assignments: {len(assignments)}")
     if assignments:
         next_item = assignments[0]
@@ -1353,11 +1429,16 @@ async def my_week(interaction: discord.Interaction) -> None:
 
     start_day = date.today()
     end_day = start_day + timedelta(days=6)
-    assignments = bot.bluefolder.get_assignments_for_user_window(
+    assignments = await _run_bluefolder_read(
+        interaction,
+        "Could not load your weekly assignments",
+        bot.bluefolder.get_assignments_for_user_window,
         tech_id,
         start_day=start_day,
         end_day=end_day,
     )
+    if assignments is None:
+        return
     by_day: dict[str, list[dict[str, object]]] = {}
     for item in assignments:
         raw_start = str(item.get("start") or "")
@@ -1385,7 +1466,14 @@ async def my_next_packet(interaction: discord.Interaction) -> None:
         return
     await interaction.response.defer(ephemeral=True)
 
-    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        "Could not load your assignments",
+        bot.bluefolder.get_assignments_for_user_today,
+        tech_id,
+    )
+    if assignments is None:
+        return
     if not assignments:
         await interaction.followup.send("No assignments found for you today.", ephemeral=True)
         return
@@ -1396,14 +1484,18 @@ async def my_next_packet(interaction: discord.Interaction) -> None:
         await interaction.followup.send("Your next assignment does not have a service request ID.", ephemeral=True)
         return
 
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
-    notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
+    notes = await _run_bluefolder_read(
+        interaction,
+        f"Could not load notes for `{sr_id}`",
+        bot.bluefolder.get_service_request_notes,
+        sr_id,
+        limit=2,
+    )
+    if notes is None:
+        return
     await _send_followup_lines(interaction, _job_packet_lines(item, notes=notes, assignment=assignment), ephemeral=True)
 
 
@@ -1417,7 +1509,15 @@ async def export_today_board(interaction: discord.Interaction) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
-    loads = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=50)
+    loads = await _run_bluefolder_read(
+        interaction,
+        "Could not load today's dispatch board",
+        bot.bluefolder.get_dispatch_loads_for_day,
+        date.today(),
+        limit=50,
+    )
+    if loads is None:
+        return
     payload = {
         "guild_id": str(interaction.guild_id or ""),
         "date": date.today().isoformat(),
@@ -1444,7 +1544,15 @@ async def today_board(interaction: discord.Interaction) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
-    loads = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=15)
+    loads = await _run_bluefolder_read(
+        interaction,
+        "Could not load today's dispatch board",
+        bot.bluefolder.get_dispatch_loads_for_day,
+        date.today(),
+        limit=15,
+    )
+    if loads is None:
+        return
     if not loads:
         await interaction.followup.send("No tech load data found for today.", ephemeral=True)
         return
@@ -1474,7 +1582,15 @@ async def next_openings(interaction: discord.Interaction) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
-    loads = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=15)
+    loads = await _run_bluefolder_read(
+        interaction,
+        "Could not load today's dispatch board",
+        bot.bluefolder.get_dispatch_loads_for_day,
+        date.today(),
+        limit=15,
+    )
+    if loads is None:
+        return
     if not loads:
         await interaction.followup.send("No tech load data found for today.", ephemeral=True)
         return
@@ -1506,23 +1622,29 @@ async def sr_brief(interaction: discord.Interaction, sr_id: int) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
-        return
-    if not item:
-        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
 
-    notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
-    assignments = bot.bluefolder.find_sr_assignment_window(
+    notes = await _run_bluefolder_read(
+        interaction,
+        f"Could not load notes for `{sr_id}`",
+        bot.bluefolder.get_service_request_notes,
+        sr_id,
+        limit=2,
+    )
+    if notes is None:
+        return
+    assignments = await _run_bluefolder_read(
+        interaction,
+        f"Could not load assignment window for `{sr_id}`",
+        bot.bluefolder.find_sr_assignment_window,
         sr_id,
         start_day=date.today(),
         end_day=date.today() + timedelta(days=7),
     )
+    if assignments is None:
+        return
 
     lines = [
         f"SR {item['id']}",
@@ -1563,18 +1685,19 @@ async def parts_brief(interaction: discord.Interaction, sr_id: int) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
-        return
-    if not item:
-        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
 
-    part_notes = bot.bluefolder.get_recent_part_notes(sr_id, limit=3)
+    part_notes = await _run_bluefolder_read(
+        interaction,
+        f"Could not load parts notes for `{sr_id}`",
+        bot.bluefolder.get_recent_part_notes,
+        sr_id,
+        limit=3,
+    )
+    if part_notes is None:
+        return
     lines = [
         f"SR {item['id']}",
         f"Subject: {item.get('subject') or 'n/a'}",
@@ -1605,7 +1728,15 @@ async def parts_notes(interaction: discord.Interaction, sr_id: int) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
-    notes = bot.bluefolder.get_recent_part_notes(sr_id, limit=6)
+    notes = await _run_bluefolder_read(
+        interaction,
+        f"Could not load parts notes for `{sr_id}`",
+        bot.bluefolder.get_recent_part_notes,
+        sr_id,
+        limit=6,
+    )
+    if notes is None:
+        return
     if not notes:
         await interaction.followup.send(f"No recent parts-related notes found for `{sr_id}`.", ephemeral=True)
         return
@@ -1631,7 +1762,14 @@ async def next_job(interaction: discord.Interaction) -> None:
         return
     await interaction.response.defer(ephemeral=True)
 
-    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        "Could not load your assignments",
+        bot.bluefolder.get_assignments_for_user_today,
+        tech_id,
+    )
+    if assignments is None:
+        return
     if not assignments:
         await interaction.followup.send("No assignments found for you today.", ephemeral=True)
         return
@@ -1656,7 +1794,14 @@ async def assignments_today(interaction: discord.Interaction, tech_id: int) -> N
         )
         return
     await interaction.response.defer(ephemeral=True)
-    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        f"Could not load assignments for tech `{tech_id}`",
+        bot.bluefolder.get_assignments_for_user_today,
+        tech_id,
+    )
+    if assignments is None:
+        return
     if not assignments:
         await interaction.followup.send(f"No assignments found today for tech `{tech_id}`.", ephemeral=True)
         return
@@ -1674,15 +1819,8 @@ async def assignments_today(interaction: discord.Interaction, tech_id: int) -> N
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def sr(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
-        return
-    if not item:
-        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
 
     lines = [
@@ -1700,17 +1838,18 @@ async def sr(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def job_packet(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
-    if not item:
-        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+    notes = await _run_bluefolder_read(
+        interaction,
+        f"Could not load notes for `{sr_id}`",
+        bot.bluefolder.get_service_request_notes,
+        sr_id,
+        limit=2,
+    )
+    if notes is None:
         return
-    notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
     await interaction.followup.send(
         "\n".join(_job_packet_lines(item, notes=notes)),
         ephemeral=True,
@@ -1721,15 +1860,8 @@ async def job_packet(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def customer(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
-        return
-    if not item:
-        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
 
     lines = [
@@ -1754,15 +1886,8 @@ async def customer(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def site(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_service_request(sr_id)
-    if item.get("error"):
-        await interaction.followup.send(
-            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
-            ephemeral=True,
-        )
-        return
-    if not item:
-        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+    item = await _load_service_request_or_reply(interaction, sr_id)
+    if item is None:
         return
 
     lines = [
@@ -1778,7 +1903,14 @@ async def site(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def notes(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    comments = bot.bluefolder.get_service_request_notes(sr_id)
+    comments = await _run_bluefolder_read(
+        interaction,
+        f"Could not load notes for `{sr_id}`",
+        bot.bluefolder.get_service_request_notes,
+        sr_id,
+    )
+    if comments is None:
+        return
     if not comments:
         await interaction.followup.send(f"No recent notes found for `{sr_id}`.", ephemeral=True)
         return
@@ -1804,7 +1936,15 @@ async def notes(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def history(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    entries = bot.bluefolder.get_service_request_history(sr_id, limit=10)
+    entries = await _run_bluefolder_read(
+        interaction,
+        f"Could not load history for `{sr_id}`",
+        bot.bluefolder.get_service_request_history,
+        sr_id,
+        limit=10,
+    )
+    if entries is None:
+        return
     if not entries:
         await interaction.followup.send(f"No history found for `{sr_id}`.", ephemeral=True)
         return
@@ -1860,7 +2000,14 @@ async def note_add(interaction: discord.Interaction, sr_id: int, text: str, conf
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def troubleshoot(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    result = bot.bluefolder.build_troubleshooting_summary(sr_id)
+    result = await _run_bluefolder_read(
+        interaction,
+        f"Could not build troubleshooting summary for `{sr_id}`",
+        bot.bluefolder.build_troubleshooting_summary,
+        sr_id,
+    )
+    if result is None:
+        return
     if result.get("error"):
         await interaction.followup.send(
             f"Could not build troubleshooting summary for `{sr_id}`: {result['error']}",
@@ -1938,6 +2085,7 @@ async def no_answer(interaction: discord.Interaction, sr_id: int, details: str |
         note_text=result.get("note_text") or "",
         channel_id=settings.dispatcher_alert_channel_id,
         enabled=settings.dispatcher_alert_on_contact_issue,
+        channel_label="Dispatcher",
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
@@ -1988,6 +2136,7 @@ async def not_home(interaction: discord.Interaction, sr_id: int, details: str | 
         note_text=result.get("note_text") or "",
         channel_id=settings.dispatcher_alert_channel_id,
         enabled=settings.dispatcher_alert_on_contact_issue,
+        channel_label="Dispatcher",
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
@@ -2041,6 +2190,7 @@ async def access_issue(interaction: discord.Interaction, sr_id: int, details: st
         note_text=result.get("note_text") or "",
         channel_id=settings.dispatcher_alert_channel_id,
         enabled=settings.dispatcher_alert_on_contact_issue,
+        channel_label="Dispatcher",
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
@@ -2094,6 +2244,7 @@ async def missing_part(interaction: discord.Interaction, sr_id: int, details: st
         note_text=result.get("note_text") or "",
         channel_id=settings.parts_alert_channel_id,
         enabled=settings.parts_alert_on_contact_issue,
+        channel_label="Parts",
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
@@ -2144,6 +2295,7 @@ async def damaged_part(interaction: discord.Interaction, sr_id: int, details: st
         note_text=result.get("note_text") or "",
         channel_id=settings.parts_alert_channel_id,
         enabled=settings.parts_alert_on_contact_issue,
+        channel_label="Parts",
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
@@ -2306,7 +2458,14 @@ async def complete(interaction: discord.Interaction, sr_id: int, confirm: bool =
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def attachments(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.get_service_request_attachments(sr_id)
+    rows = await _run_bluefolder_read(
+        interaction,
+        f"Could not load attachments for `{sr_id}`",
+        bot.bluefolder.get_service_request_attachments,
+        sr_id,
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(f"No attachments found for `{sr_id}`.", ephemeral=True)
         return
@@ -2325,7 +2484,14 @@ async def attachments(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def equipment(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.get_service_request_equipment(sr_id)
+    rows = await _run_bluefolder_read(
+        interaction,
+        f"Could not load equipment for `{sr_id}`",
+        bot.bluefolder.get_service_request_equipment,
+        sr_id,
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(f"No equipment found for `{sr_id}`.", ephemeral=True)
         return
@@ -2349,7 +2515,14 @@ async def equipment(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def materials(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.get_service_request_materials(sr_id)
+    rows = await _run_bluefolder_read(
+        interaction,
+        f"Could not load materials for `{sr_id}`",
+        bot.bluefolder.get_service_request_materials,
+        sr_id,
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(f"No materials found for `{sr_id}`.", ephemeral=True)
         return
@@ -2371,7 +2544,14 @@ async def materials(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def labor(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.get_service_request_labor(sr_id)
+    rows = await _run_bluefolder_read(
+        interaction,
+        f"Could not load labor for `{sr_id}`",
+        bot.bluefolder.get_service_request_labor,
+        sr_id,
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(f"No labor found for `{sr_id}`.", ephemeral=True)
         return
@@ -2395,7 +2575,15 @@ async def labor(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(text="Customer or subject text")
 async def search_customer(interaction: discord.Interaction, text: str) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.search_recent_service_requests(text, field="customer")
+    rows = await _run_bluefolder_read(
+        interaction,
+        "Could not search customers",
+        bot.bluefolder.search_recent_service_requests,
+        text,
+        field="customer",
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(f"No customers matched `{text}`.", ephemeral=True)
         return
@@ -2411,7 +2599,15 @@ async def search_customer(interaction: discord.Interaction, text: str) -> None:
 @app_commands.describe(text="SR id fragment or subject text")
 async def find_sr(interaction: discord.Interaction, text: str) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.search_recent_service_requests(text, field="service_request")
+    rows = await _run_bluefolder_read(
+        interaction,
+        "Could not search recent service requests",
+        bot.bluefolder.search_recent_service_requests,
+        text,
+        field="service_request",
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send("No recent service requests matched that search.", ephemeral=True)
         return
@@ -2431,7 +2627,15 @@ async def find_sr(interaction: discord.Interaction, text: str) -> None:
 @app_commands.describe(text="Address, city, state, or zip text")
 async def search_address(interaction: discord.Interaction, text: str) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.search_recent_service_requests(text, field="address")
+    rows = await _run_bluefolder_read(
+        interaction,
+        "Could not search addresses",
+        bot.bluefolder.search_recent_service_requests,
+        text,
+        field="address",
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(
             "Address search is not fully supported by the BlueFolder endpoints available on this tenant yet.",
@@ -2452,7 +2656,14 @@ async def search_address(interaction: discord.Interaction, text: str) -> None:
 @app_commands.describe(user_id="BlueFolder user ID")
 async def user(interaction: discord.Interaction, user_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_user(user_id)
+    item = await _run_bluefolder_read(
+        interaction,
+        f"BlueFolder lookup failed for user `{user_id}`",
+        bot.bluefolder.get_user,
+        user_id,
+    )
+    if item is None:
+        return
     if item.get("error"):
         await interaction.followup.send(
             f"BlueFolder lookup failed for user `{user_id}`: {item['error']}",
@@ -2477,7 +2688,14 @@ async def user(interaction: discord.Interaction, user_id: int) -> None:
 @app_commands.describe(customer_id="BlueFolder customer ID")
 async def customer_lookup(interaction: discord.Interaction, customer_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    item = bot.bluefolder.get_customer_summary(customer_id)
+    item = await _run_bluefolder_read(
+        interaction,
+        f"BlueFolder lookup failed for customer `{customer_id}`",
+        bot.bluefolder.get_customer_summary,
+        customer_id,
+    )
+    if item is None:
+        return
     if item.get("error"):
         await interaction.followup.send(
             f"BlueFolder lookup failed for customer `{customer_id}`: {item['error']}",
@@ -2500,7 +2718,13 @@ async def customer_lookup(interaction: discord.Interaction, customer_id: int) ->
 @bot.tree.command(name="bf_status", description="Show BlueFolder connectivity/config status.")
 async def bf_status(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
-    status = bot.bluefolder.bluefolder_status()
+    status = await _run_bluefolder_read(
+        interaction,
+        "Could not load BlueFolder status",
+        bot.bluefolder.bluefolder_status,
+    )
+    if status is None:
+        return
     lines = [
         f"OK: {status.get('ok')}",
         f"Base URL: {status.get('base_url') or 'n/a'}",
@@ -2517,7 +2741,15 @@ async def bf_status(interaction: discord.Interaction) -> None:
 @bot.tree.command(name="tech_loads", description="Show today's assignment counts by technician.")
 async def tech_loads(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.get_dispatch_loads_for_day(date.today(), limit=15)
+    rows = await _run_bluefolder_read(
+        interaction,
+        "Could not load technician loads",
+        bot.bluefolder.get_dispatch_loads_for_day,
+        date.today(),
+        limit=15,
+    )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send("No technician load data available.", ephemeral=True)
         return
@@ -2546,7 +2778,15 @@ async def tech_day(interaction: discord.Interaction, tech_id: int, when: str) ->
         await interaction.followup.send("Use YYYY-MM-DD for the date.", ephemeral=True)
         return
 
-    assignments = bot.bluefolder.get_assignments_for_user_day(tech_id, day)
+    assignments = await _run_bluefolder_read(
+        interaction,
+        f"Could not load assignments for tech `{tech_id}` on `{day.isoformat()}`",
+        bot.bluefolder.get_assignments_for_user_day,
+        tech_id,
+        day,
+    )
+    if assignments is None:
+        return
     if not assignments:
         await interaction.followup.send(
             f"No assignments found for tech `{tech_id}` on `{when}`.",
@@ -2569,11 +2809,16 @@ async def tech_day(interaction: discord.Interaction, tech_id: int, when: str) ->
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def who_has_sr(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    rows = bot.bluefolder.find_sr_assignment_window(
+    rows = await _run_bluefolder_read(
+        interaction,
+        f"Could not load assignment window for `{sr_id}`",
+        bot.bluefolder.find_sr_assignment_window,
         sr_id,
         start_day=date.today(),
         end_day=date.today() + timedelta(days=14),
     )
+    if rows is None:
+        return
     if not rows:
         await interaction.followup.send(
             f"No active-tech assignment found in the next 14 days for `{sr_id}`.",
@@ -2598,7 +2843,14 @@ async def who_has_sr(interaction: discord.Interaction, sr_id: int) -> None:
 @app_commands.describe(sr_id="BlueFolder service request ID")
 async def waiver(interaction: discord.Interaction, sr_id: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    result = bot.bluefolder.build_waiver_link(sr_id)
+    result = await _run_bluefolder_read(
+        interaction,
+        f"Could not build waiver link for `{sr_id}`",
+        bot.bluefolder.build_waiver_link,
+        sr_id,
+    )
+    if result is None:
+        return
     if result.get("error"):
         await interaction.followup.send(
             f"Could not build waiver link for `{sr_id}`: {result['error']}",
