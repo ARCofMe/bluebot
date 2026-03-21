@@ -128,6 +128,7 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/assignments_today tech_id - today's assignments for a tech",
             "/my_day date - show your assignments for a specific YYYY-MM-DD date",
             "/my_jobs - today's assignments for your mapped tech",
+            "/my_next_packet - compact packet for your next assignment",
             "/my_status - show your mapping, today's job count, and next assignment",
             "/my_week - show your assignment counts for the next 7 days",
             "/next_job - your next scheduled assignment today",
@@ -142,6 +143,7 @@ def _help_sections() -> list[tuple[str, list[str]]]:
             "/equipment sr_id - customer equipment for the job site",
             "/find_sr text - search recent service requests by SR id or subject",
             "/history sr_id - broader service request history",
+            "/job_packet sr_id - compact field packet for one service request",
             "/labor sr_id - labor recorded against the service request",
             "/materials sr_id - materials recorded against the service request",
             "/notes sr_id - recent service request notes",
@@ -447,6 +449,40 @@ async def _send_write_preview(
         "Run the command again with `confirm:true` to write this update.",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+def _job_packet_lines(
+    item: dict[str, object],
+    *,
+    notes: list[dict[str, object]] | None = None,
+    assignment: dict[str, object] | None = None,
+) -> list[str]:
+    lines = [
+        f"SR {item.get('id') or '?'}",
+        f"Subject: {item.get('subject') or 'n/a'}",
+        f"Status: {item.get('status') or 'n/a'}",
+        f"Priority: {item.get('priority') or 'n/a'}",
+        f"Customer: {item.get('customer_name') or 'n/a'}",
+        f"Address: {item.get('address') or 'n/a'}",
+    ]
+    if assignment:
+        lines.append(
+            f"Scheduled: {assignment.get('start_display') or assignment.get('start') or 'unscheduled'}"
+        )
+    if item.get("customer_phone"):
+        lines.append(f"Phone: {item.get('customer_phone')}")
+    if item.get("customer_email"):
+        lines.append(f"Email: {item.get('customer_email')}")
+    if item.get("site_notes"):
+        lines.append(f"Site Notes: {str(item.get('site_notes'))[:220]}")
+    if notes:
+        latest = notes[0]
+        lines.append(
+            f"Latest note: {(latest.get('entryType') or 'Note')} | {latest.get('dateCreated') or 'unknown'}"
+        )
+        if latest.get("text"):
+            lines.append(f"Latest text: {str(latest.get('text'))[:220]}")
+    return lines
 
 
 async def _send_channel_alert(
@@ -1046,6 +1082,39 @@ async def my_week(interaction: discord.Interaction) -> None:
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
+@bot.tree.command(name="my_next_packet", description="Show a compact packet for your next assignment.")
+async def my_next_packet(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    tech_id = _my_tech_id(interaction)
+    if not tech_id:
+        await interaction.followup.send(_my_tech_help(), ephemeral=True)
+        return
+
+    assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
+    if not assignments:
+        await interaction.followup.send("No assignments found for you today.", ephemeral=True)
+        return
+
+    assignment = assignments[0]
+    sr_id = int(assignment.get("service_request_id") or 0)
+    if not sr_id:
+        await interaction.followup.send("Your next assignment does not have a service request ID.", ephemeral=True)
+        return
+
+    item = bot.bluefolder.get_service_request(sr_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
+    notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
+    await interaction.followup.send(
+        "\n".join(_job_packet_lines(item, notes=notes, assignment=assignment)),
+        ephemeral=True,
+    )
+
+
 @bot.tree.command(name="today_board", description="Show today's assignment load snapshot for dispatch.")
 async def today_board(interaction: discord.Interaction) -> None:
     if not _require_dispatch_access(interaction):
@@ -1301,6 +1370,27 @@ async def sr(interaction: discord.Interaction, sr_id: int) -> None:
     if item.get("address"):
         lines.append(f"Address: {item['address']}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="job_packet", description="Show a compact field packet for one service request.")
+@app_commands.describe(sr_id="BlueFolder service request ID")
+async def job_packet(interaction: discord.Interaction, sr_id: int) -> None:
+    await interaction.response.defer(ephemeral=True)
+    item = bot.bluefolder.get_service_request(sr_id)
+    if item.get("error"):
+        await interaction.followup.send(
+            f"BlueFolder lookup failed for `{sr_id}`: {item['error']}",
+            ephemeral=True,
+        )
+        return
+    if not item:
+        await interaction.followup.send(f"Service request `{sr_id}` not found.", ephemeral=True)
+        return
+    notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
+    await interaction.followup.send(
+        "\n".join(_job_packet_lines(item, notes=notes)),
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="customer", description="Show customer details and contacts for a service request.")
