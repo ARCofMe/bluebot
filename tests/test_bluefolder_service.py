@@ -1,5 +1,6 @@
 from datetime import date
 from types import SimpleNamespace
+from xml.etree import ElementTree as ET
 
 from app.services.bluefolder_service import BlueFolderService
 from app.core.config import settings
@@ -149,3 +150,152 @@ def test_mark_enroute_returns_eta_failure(monkeypatch):
 
     assert result == {"ok": False, "error": "write failed"}
     assert len(calls) == 2
+
+
+def test_get_service_request_parses_customer_location_and_equipment(monkeypatch):
+    svc = _service()
+    sr_xml = ET.fromstring(
+        """
+        <response>
+          <serviceRequest>
+            <id>12345</id>
+            <description>Refrigerator not cooling</description>
+            <status>Open</status>
+            <priority>High</priority>
+            <customerId>77</customerId>
+            <customerName>Acme Bakery</customerName>
+            <customerContactFirstName>Jane</customerContactFirstName>
+            <customerContactLastName>Owner</customerContactLastName>
+            <customerContactPhone>207-555-0100</customerContactPhone>
+            <customerContactEmail>jane@example.com</customerContactEmail>
+            <customerLocationName>Main Shop</customerLocationName>
+            <customerLocationStreetAddress>123 Main St</customerLocationStreetAddress>
+            <customerLocationCity>Portland</customerLocationCity>
+            <customerLocationState>ME</customerLocationState>
+            <customerLocationPostalCode>04101</customerLocationPostalCode>
+            <customerLocationNotes>Use side entrance</customerLocationNotes>
+            <equipmentToService>
+              <equipmentItem>
+                <equipmentId>999</equipmentId>
+                <equipName>Walk-In Cooler</equipName>
+                <modelNo>ABC123</modelNo>
+                <serialNo>SERIAL1</serialNo>
+              </equipmentItem>
+            </equipmentToService>
+          </serviceRequest>
+        </response>
+        """
+    )
+    svc.client = SimpleNamespace(service_requests=SimpleNamespace(get_by_id=lambda sr_id: sr_xml))
+    monkeypatch.setattr(BlueFolderService, "_location_dict", lambda self, customer_id, location_id: None)
+    monkeypatch.setattr(BlueFolderService, "_customer_dict", lambda self, customer_id: None)
+
+    result = svc.get_service_request(12345)
+
+    assert result["id"] == "12345"
+    assert result["subject"] == "Refrigerator not cooling"
+    assert result["customer_name"] == "Acme Bakery"
+    assert result["address"] == "123 Main St, Portland, ME, 04101"
+    assert result["site_notes"] == "Use side entrance"
+    assert result["contacts"][0]["name"] == "Jane Owner"
+    assert result["equipment"][0]["name"] == "Walk-In Cooler"
+
+
+def test_get_service_request_notes_strips_html_sorts_and_filters():
+    svc = _service()
+    history_xml = ET.fromstring(
+        """
+        <response>
+          <serviceRequestHistory>
+            <entryDate>2026-03-20T08:00:00</entryDate>
+            <userName>Older Tech</userName>
+            <entryType>Note</entryType>
+            <comment>&lt;p&gt;Older&lt;br&gt;note&lt;/p&gt;</comment>
+          </serviceRequestHistory>
+          <serviceRequestHistory>
+            <entryDate>2026-03-21T09:30:00</entryDate>
+            <userName>Newer Tech</userName>
+            <entryType>Diagnosis</entryType>
+            <description>&lt;p&gt;Newest &lt;strong&gt;note&lt;/strong&gt;&lt;/p&gt;</description>
+          </serviceRequestHistory>
+          <serviceRequestHistory>
+            <entryDate>2026-03-19T07:00:00</entryDate>
+            <userName>Ignored</userName>
+            <entryType>Note</entryType>
+            <comment></comment>
+          </serviceRequestHistory>
+        </response>
+        """
+    )
+    svc.client = SimpleNamespace(service_requests=SimpleNamespace(get_history=lambda sr_id: history_xml))
+
+    notes = svc.get_service_request_notes(12345, limit=5)
+
+    assert len(notes) == 2
+    assert notes[0]["author"] == "Newer Tech"
+    assert notes[0]["text"] == "Newest note"
+    assert notes[1]["text"] == "Older\nnote"
+
+
+def test_build_troubleshooting_summary_prefers_labor_sections(monkeypatch):
+    svc = _service()
+    monkeypatch.setattr(
+        BlueFolderService,
+        "get_service_request",
+        lambda self, sr_id: {
+            "id": "12345",
+            "subject": "Dishwasher leaking",
+            "customer_name": "Acme Bakery",
+            "address": "123 Main St, Portland, ME, 04101",
+        },
+    )
+    monkeypatch.setattr(
+        BlueFolderService,
+        "get_service_request_labor",
+        lambda self, sr_id, limit=3: [
+            {
+                "description": "Customer Complaint: leaking badly\nDiagnosis: bad inlet valve\nWork Performed: replaced valve"
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        BlueFolderService,
+        "get_service_request_notes",
+        lambda self, sr_id, limit=8: [{"text": "Diagnosis: from notes only"}],
+    )
+
+    result = svc.build_troubleshooting_summary(12345)
+
+    assert result["sections"]["complaint"] == "leaking badly"
+    assert result["sections"]["diagnosis"] == "bad inlet valve"
+    assert result["sections"]["work_performed"] == "replaced valve"
+    assert "Customer Complaint" in result["source_text"]
+
+
+def test_build_troubleshooting_summary_falls_back_to_notes(monkeypatch):
+    svc = _service()
+    monkeypatch.setattr(
+        BlueFolderService,
+        "get_service_request",
+        lambda self, sr_id: {
+            "id": "12345",
+            "subject": "Washer noisy",
+            "customer_name": "Acme Bakery",
+            "address": "123 Main St, Portland, ME, 04101",
+        },
+    )
+    monkeypatch.setattr(BlueFolderService, "get_service_request_labor", lambda self, sr_id, limit=3: [])
+    monkeypatch.setattr(
+        BlueFolderService,
+        "get_service_request_notes",
+        lambda self, sr_id, limit=8: [
+            {"text": "Diagnosis: worn bearings\nParts Needed: tub kit"},
+            {"text": "older note"},
+        ],
+    )
+
+    result = svc.build_troubleshooting_summary(12345)
+
+    assert result["sections"]["diagnosis"] == "worn bearings"
+    assert result["sections"]["parts_needed"] == "tub kit"
+    assert result["source_text"] == "Diagnosis: worn bearings\nParts Needed: tub kit"
