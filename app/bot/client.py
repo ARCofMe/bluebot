@@ -208,6 +208,48 @@ def _chunk_lines(lines: list[str], *, limit: int = _DISCORD_MESSAGE_LIMIT) -> li
     if current:
         chunks.append("\n".join(current))
     return chunks
+
+
+def _chunk_text(text: str, *, limit: int = _DISCORD_MESSAGE_LIMIT) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    lines = text.splitlines()
+    if len(lines) > 1:
+        return _chunk_lines(lines, limit=limit)
+    return [text[idx:idx + limit] for idx in range(0, len(text), limit)]
+
+
+async def _send_response_text(
+    interaction: discord.Interaction,
+    text: str,
+    *,
+    ephemeral: bool = True,
+) -> None:
+    chunks = _chunk_text(text)
+    await interaction.response.send_message(chunks[0], ephemeral=ephemeral)
+    for chunk in chunks[1:]:
+        await interaction.followup.send(chunk, ephemeral=ephemeral)
+
+
+async def _send_followup_text(
+    interaction: discord.Interaction,
+    text: str,
+    *,
+    ephemeral: bool = True,
+) -> None:
+    for chunk in _chunk_text(text):
+        await interaction.followup.send(chunk, ephemeral=ephemeral)
+
+
+async def _send_followup_lines(
+    interaction: discord.Interaction,
+    lines: list[str],
+    *,
+    ephemeral: bool = True,
+) -> None:
+    await _send_followup_text(interaction, "\n".join(lines), ephemeral=ephemeral)
+
+
 def _has_access(interaction: discord.Interaction, access: str) -> bool:
     if access == ACCESS_ALL:
         return True
@@ -528,21 +570,24 @@ async def _send_write_preview(
         *preview_lines,
         "Run the command again with `confirm:true` to write this update.",
     ]
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    await _send_response_text(interaction, "\n".join(lines), ephemeral=True)
 
 
 async def _require_mapped_tech_or_reply(interaction: discord.Interaction) -> int | None:
     tech_id = _mapped_tech_id(interaction)
     if tech_id:
         return tech_id
-    await interaction.response.send_message(_my_tech_help(), ephemeral=True)
+    await _send_response_text(interaction, _my_tech_help(), ephemeral=True)
     return None
 
 
 def _write_json_export(stem_suffix: str, payload: dict[str, object]) -> str:
     path = export_output_path(stem_suffix=stem_suffix)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Could not write export file: {exc}") from exc
     return str(path)
 
 
@@ -636,9 +681,10 @@ async def help_command(interaction: discord.Interaction) -> None:
             *sections[0][1],
         ]
     )
-    await interaction.response.send_message(first_message, ephemeral=True)
+    await _send_response_text(interaction, first_message, ephemeral=True)
     for title, commands_in_section in sections[1:]:
-        await interaction.followup.send(
+        await _send_followup_text(
+            interaction,
             "\n".join([f"**{title}**", *commands_in_section]),
             ephemeral=True,
         )
@@ -677,7 +723,7 @@ async def who_am_i_mapped_to(interaction: discord.Interaction) -> None:
     if not direct_map and len(matched_techs) != 1:
         lines.append("Ask an admin to run `/suggest_tech_map` or update `DISCORD_TECH_MAP`.")
 
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    await _send_response_text(interaction, "\n".join(lines), ephemeral=True)
 
 
 @bot.tree.command(name="tech_map_status", description="Show Discord-to-BlueFolder tech mapping coverage.")
@@ -772,11 +818,7 @@ async def tech_map_status(
         lines.append("Examples:")
         lines.extend(sample_lines)
 
-    for idx, chunk in enumerate(_chunk_lines(lines)):
-        if idx == 0:
-            await interaction.followup.send(chunk, ephemeral=True)
-        else:
-            await interaction.followup.send(chunk, ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="lookup_member", description="Inspect one Discord member's BlueFolder mapping status.")
@@ -823,7 +865,7 @@ async def lookup_member(
     else:
         lines.append("Name-based match: none")
 
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    await _send_response_text(interaction, "\n".join(lines), ephemeral=True)
 
 
 @bot.tree.command(name="role_audit", description="Summarize configured Discord role coverage.")
@@ -866,7 +908,7 @@ async def role_audit(
         f"Parts role matches: {parts_count}",
         f"No configured roles: {no_configured_role}",
     ]
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="export_mapping_audit", description="Write a mapping and role audit snapshot to JSON.")
@@ -922,11 +964,12 @@ async def export_mapping_audit(
             }
         )
 
-    export_path = _write_json_export("_mapping_audit", payload)
-    await interaction.followup.send(
-        f"Wrote mapping audit snapshot to `{export_path}`.",
-        ephemeral=True,
-    )
+    try:
+        export_path = _write_json_export("_mapping_audit", payload)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
+        return
+    await interaction.followup.send(f"Wrote mapping audit snapshot to `{export_path}`.", ephemeral=True)
 
 
 @bot.tree.command(name="mapping_drift", description="Audit role and mapping drift across members.")
@@ -998,7 +1041,7 @@ async def mapping_drift(
         lines.append("")
         lines.append("Examples:")
         lines.extend(sample_lines)
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="export_member_map", description="Export Discord user ids and names to a JSON file.")
@@ -1031,7 +1074,11 @@ async def export_member_map(
         "members": records,
         "discord_tech_map_template": {item["discord_user_id"]: None for item in records},
     }
-    export_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        export_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as exc:
+        await interaction.followup.send(f"Could not write export file: {exc}", ephemeral=True)
+        return
     await interaction.followup.send(
         f"Wrote {len(records)} member records to `{export_file}`.",
         ephemeral=True,
@@ -1072,9 +1119,13 @@ async def suggest_tech_map(
         **suggestion,
     }
     suggestion_path = export_output_path(stem_suffix="_suggested_map")
-    suggestion_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     env_path = export_output_path(stem_suffix="_tech_map", extension=".env")
-    env_path.write_text(f"{suggestion['suggested_discord_tech_map_env']}\n", encoding="utf-8")
+    try:
+        suggestion_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        env_path.write_text(f"{suggestion['suggested_discord_tech_map_env']}\n", encoding="utf-8")
+    except OSError as exc:
+        await interaction.followup.send(f"Could not write export file: {exc}", ephemeral=True)
+        return
 
     await interaction.followup.send(
         (
@@ -1097,7 +1148,7 @@ async def techs(interaction: discord.Interaction) -> None:
         return
 
     lines = [f"{t['id']} - {t['name']}" for t in tech_list[:25]]
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="my_jobs", description="Show today's assignments for your mapped technician account.")
@@ -1118,7 +1169,7 @@ async def my_jobs(interaction: discord.Interaction) -> None:
         sr_id = item.get("service_request_id") or "?"
         subject = item.get("subject") or "Service Request"
         lines.append(f"{idx}. {start} - SR {sr_id} - {subject}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="my_day", description="Show your assignments for a specific day.")
@@ -1145,7 +1196,7 @@ async def my_day(interaction: discord.Interaction, date_iso: str) -> None:
         sr_id = item.get("service_request_id") or "?"
         subject = item.get("subject") or "Service Request"
         lines.append(f"{idx}. {start} - SR {sr_id} - {subject}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="my_status", description="Show your mapping, today's job count, and next assignment.")
@@ -1180,7 +1231,7 @@ async def my_status(interaction: discord.Interaction) -> None:
 
     if not tech_id:
         lines.append("Today's assignments: unavailable until your Discord user maps to a BlueFolder tech.")
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        await _send_followup_lines(interaction, lines, ephemeral=True)
         return
 
     assignments = bot.bluefolder.get_assignments_for_user_today(tech_id)
@@ -1197,7 +1248,7 @@ async def my_status(interaction: discord.Interaction) -> None:
     else:
         lines.append("Next assignment: none scheduled today")
 
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="my_week", description="Show your assignment counts for the next 7 days.")
@@ -1231,7 +1282,7 @@ async def my_week(interaction: discord.Interaction) -> None:
             )
         else:
             lines.append(f"{day.isoformat()}: 0 assignments")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="my_next_packet", description="Show a compact packet for your next assignment.")
@@ -1260,10 +1311,7 @@ async def my_next_packet(interaction: discord.Interaction) -> None:
         )
         return
     notes = bot.bluefolder.get_service_request_notes(sr_id, limit=2)
-    await interaction.followup.send(
-        "\n".join(_job_packet_lines(item, notes=notes, assignment=assignment)),
-        ephemeral=True,
-    )
+    await _send_followup_lines(interaction, _job_packet_lines(item, notes=notes, assignment=assignment), ephemeral=True)
 
 
 @bot.tree.command(name="export_today_board", description="Write today's dispatch board snapshot to JSON.")
@@ -1285,11 +1333,12 @@ async def export_today_board(interaction: discord.Interaction) -> None:
         "heavy_count": sum(1 for item in loads if int(item.get("assignment_count") or 0) >= 5),
         "loads": loads,
     }
-    export_path = _write_json_export("_today_board", payload)
-    await interaction.followup.send(
-        f"Wrote today's board snapshot to `{export_path}`.",
-        ephemeral=True,
-    )
+    try:
+        export_path = _write_json_export("_today_board", payload)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
+        return
+    await interaction.followup.send(f"Wrote today's board snapshot to `{export_path}`.", ephemeral=True)
 
 
 @bot.tree.command(name="today_board", description="Show today's assignment load snapshot for dispatch.")

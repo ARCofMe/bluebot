@@ -11,6 +11,9 @@ class DummyBlueFolder:
     def resolve_tech_id(self, discord_user_id, candidate_names=None):
         return self._mapped_ids.get(discord_user_id)
 
+    def get_dispatch_loads_for_day(self, day, limit=50):
+        return []
+
 
 class DummyResponse:
     def __init__(self):
@@ -44,6 +47,7 @@ def _interaction(*, roles=(), manage_guild=False, user_id=1, display_name="Test 
     )
     return SimpleNamespace(
         user=user,
+        guild_id=123,
         response=DummyResponse(),
         followup=DummyFollowup(),
     )
@@ -156,3 +160,29 @@ def test_enroute_preview_includes_eta_when_provided(monkeypatch):
     content = interaction.response.messages[0]["content"]
     assert "Preview only: `enroute`" in content
     assert "ETA: 20 minutes" in content
+
+
+def test_send_response_text_splits_long_messages():
+    interaction = _interaction()
+    text = "\n".join(f"line {idx} {'x' * 120}" for idx in range(30))
+
+    asyncio.run(client._send_response_text(interaction, text, ephemeral=True))
+
+    assert len(interaction.response.messages) == 1
+    assert interaction.response.messages[0]["ephemeral"] is True
+    assert interaction.followup.messages
+    assert all(len(message["content"]) <= client._DISCORD_MESSAGE_LIMIT for message in interaction.followup.messages)
+
+
+def test_export_today_board_handles_export_write_failure(monkeypatch):
+    monkeypatch.setattr(client.settings, "discord_admin_role_names", "Admin")
+    monkeypatch.setattr(client.settings, "discord_dispatcher_role_names", "Dispatcher")
+    monkeypatch.setattr(client.bot, "bluefolder", DummyBlueFolder())
+    monkeypatch.setattr(client, "_write_json_export", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Could not write export file: disk full")))
+    interaction = _interaction(roles=("Dispatcher",))
+
+    asyncio.run(client.export_today_board(interaction))
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages
+    assert interaction.followup.messages[0]["content"] == "Could not write export file: disk full"
