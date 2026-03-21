@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from app.core.config import member_export_path, settings
+from app.core.config import export_output_path, settings
 from app.services.bluefolder_service import BlueFolderService
 
 
@@ -252,6 +252,15 @@ def _discord_member_record(interaction: discord.Interaction) -> dict[str, object
     }
 
 
+def _discord_member_record_from_member(member: discord.abc.User) -> dict[str, object]:
+    return {
+        "discord_user_id": str(member.id),
+        "username": member.name,
+        "display_name": getattr(member, "display_name", member.name),
+        "global_name": getattr(member, "global_name", None),
+    }
+
+
 async def _send_channel_alert(
     interaction: discord.Interaction,
     *,
@@ -315,6 +324,7 @@ async def help_command(interaction: discord.Interaction) -> None:
         "/help - show this command list",
         "/history sr_id - broader service request history",
         "/labor sr_id - labor recorded against the service request",
+        "/lookup_member user - inspect one Discord member's BlueFolder mapping state",
         "/materials sr_id - materials recorded against the service request",
         "/missing_part sr_id details - log a missing part issue",
         "/my_jobs - today's assignments for your mapped tech",
@@ -470,6 +480,50 @@ async def tech_map_status(
             await interaction.followup.send(chunk, ephemeral=True)
 
 
+@bot.tree.command(name="lookup_member", description="Inspect one Discord member's BlueFolder mapping status.")
+@app_commands.describe(user="Discord member to inspect.")
+async def lookup_member(
+    interaction: discord.Interaction,
+    user: discord.Member,
+) -> None:
+    if not _require_guild_admin(interaction):
+        await interaction.response.send_message(
+            "You need `Manage Server` permission to inspect another member's mapping.",
+            ephemeral=True,
+        )
+        return
+
+    techs = bot.bluefolder.list_active_techs()
+    record = _discord_member_record_from_member(user)
+    direct_map = settings.parsed_discord_tech_map.get(str(user.id))
+    matched_techs = _matching_techs_for_member_record(record, techs)
+
+    lines = [
+        f"Discord user: {record['display_name']} (@{record['username']})",
+        f"Discord ID: {user.id}",
+    ]
+    if direct_map:
+        mapped_tech = next((tech for tech in techs if int(tech.get('id') or 0) == int(direct_map)), None)
+        if mapped_tech:
+            lines.append(f"Mapped via `DISCORD_TECH_MAP`: {mapped_tech['name']} (BlueFolder {mapped_tech['id']})")
+        else:
+            lines.append(f"Mapped via `DISCORD_TECH_MAP`: BlueFolder {direct_map} (not found in active tech list)")
+    else:
+        lines.append("Mapped via `DISCORD_TECH_MAP`: no")
+
+    if len(matched_techs) == 1:
+        tech = matched_techs[0]
+        lines.append(f"Name-based match: {tech['name']} (BlueFolder {tech['id']})")
+    elif len(matched_techs) > 1:
+        lines.append(
+            "Name-based matches: " + ", ".join(f"{tech['name']} ({tech['id']})" for tech in matched_techs[:5])
+        )
+    else:
+        lines.append("Name-based match: none")
+
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
 @bot.tree.command(name="export_member_map", description="Export Discord user ids and names to a JSON file.")
 @app_commands.describe(scope="Export all guild members or just members visible in this channel.")
 @app_commands.choices(
@@ -491,7 +545,7 @@ async def export_member_map(
 
     await interaction.response.defer(ephemeral=True)
     records = await _collect_members(interaction, scope=scope.value)
-    export_file = member_export_path()
+    export_file = export_output_path()
     export_file.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "guild_id": str(interaction.guild_id or ""),
@@ -531,7 +585,7 @@ async def suggest_tech_map(
     techs = bot.bluefolder.list_active_techs()
     suggestion = _build_tech_map_suggestion(records, techs)
 
-    export_file = member_export_path()
+    export_file = export_output_path()
     export_file.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "guild_id": str(interaction.guild_id or ""),
@@ -540,12 +594,14 @@ async def suggest_tech_map(
         "bluefolder_tech_count": len(techs),
         **suggestion,
     }
-    suggestion_path = export_file.with_name(f"{export_file.stem}_suggested_map.json")
+    suggestion_path = export_output_path(stem_suffix="_suggested_map")
     suggestion_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    env_path = export_output_path(stem_suffix="_tech_map", extension=".env")
+    env_path.write_text(f"{suggestion['suggested_discord_tech_map_env']}\n", encoding="utf-8")
 
     await interaction.followup.send(
         (
-            f"Wrote suggested tech map to `{suggestion_path}`. "
+            f"Wrote suggested tech map to `{suggestion_path}` and env snippet to `{env_path}`. "
             f"Matched {len(suggestion['matched'])}, ambiguous {len(suggestion['ambiguous'])}, "
             f"unmatched Discord {len(suggestion['unmatched_discord'])}, "
             f"unmatched BlueFolder {len(suggestion['unmatched_bluefolder'])}."

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     workflow_assignment_lookup_days_before: int = 0
     workflow_assignment_lookup_days_after: int = 0
     discord_member_export_path: str = "exports/discord_members.json"
+    discord_export_timestamped: bool = True
 
     waiver_base_url: str | None = None
     waiver_sr_param: str = "sr"
@@ -76,3 +78,12 @@ settings = Settings()
 
 def member_export_path() -> Path:
     return Path(settings.discord_member_export_path).expanduser()
+
+
+def export_output_path(*, stem_suffix: str = "", extension: str = ".json") -> Path:
+    base = member_export_path()
+    stem = f"{base.stem}{stem_suffix}"
+    if settings.discord_export_timestamped:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stem = f"{stem}_{stamp}"
+    return base.with_name(f"{stem}{extension}")
