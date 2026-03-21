@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from difflib import SequenceMatcher
 import json
 import re
 
@@ -141,7 +142,7 @@ def _help_lines() -> list[str]:
             "/access_issue sr_id details - log an access problem",
             "/complete sr_id - complete your assigned job",
             "/damaged_part sr_id details - log a damaged part issue",
-            "/enroute sr_id - mark yourself en route on your assigned job",
+            "/enroute sr_id [minutes] - mark yourself en route and optionally record ETA",
             "/eta sr_id minutes - update ETA on your assigned job",
             "/missing_part sr_id details - log a missing part issue",
             "/no_answer sr_id [details] - log that the customer did not answer",
@@ -179,6 +180,35 @@ def _matching_techs_for_member_record(
     return list(unique_matches.values())
 
 
+def _near_match_techs_for_member_record(
+    member: dict[str, object],
+    techs: list[dict[str, object]],
+    *,
+    threshold: float = 0.84,
+) -> list[dict[str, object]]:
+    candidates = _member_name_candidates_from_record(member)
+    scored: list[tuple[float, dict[str, object]]] = []
+    for tech in techs:
+        tech_name = _normalize_name(str(tech.get("name") or ""))
+        if not tech_name:
+            continue
+        best = max((SequenceMatcher(None, candidate, tech_name).ratio() for candidate in candidates), default=0.0)
+        if best >= threshold:
+            scored.append((best, tech))
+
+    scored.sort(key=lambda item: (-item[0], str(item[1].get("name") or "")))
+    unique: dict[int, dict[str, object]] = {}
+    for score, tech in scored[:5]:
+        tech_id = int(tech.get("id") or 0)
+        if tech_id and tech_id not in unique:
+            unique[tech_id] = {
+                "id": tech_id,
+                "name": tech.get("name"),
+                "score": round(score, 3),
+            }
+    return list(unique.values())
+
+
 def _name_candidates(member: discord.Member) -> list[str]:
     seen: set[str] = set()
     candidates: list[str] = []
@@ -197,6 +227,7 @@ def _build_tech_map_suggestion(
     suggested_map: dict[str, int] = {}
     matched: list[dict[str, object]] = []
     ambiguous: list[dict[str, object]] = []
+    near_matches: list[dict[str, object]] = []
     unmatched_discord: list[dict[str, object]] = []
     matched_tech_ids: set[int] = set()
 
@@ -230,6 +261,16 @@ def _build_tech_map_suggestion(
                 }
             )
         else:
+            nearby = _near_match_techs_for_member_record(member, techs)
+            if nearby:
+                near_matches.append(
+                    {
+                        "discord_user_id": member["discord_user_id"],
+                        "display_name": member.get("display_name"),
+                        "username": member.get("username"),
+                        "candidate_bluefolder_users": nearby,
+                    }
+                )
             unmatched_discord.append(member)
 
     unmatched_bluefolder = [
@@ -243,6 +284,7 @@ def _build_tech_map_suggestion(
         "suggested_discord_tech_map_env": f"DISCORD_TECH_MAP={json.dumps(suggested_map, separators=(',', ':'))}",
         "matched": matched,
         "ambiguous": ambiguous,
+        "near_matches": near_matches,
         "unmatched_discord": unmatched_discord,
         "unmatched_bluefolder": unmatched_bluefolder,
     }
@@ -440,6 +482,7 @@ async def tech_map_status(
     explicit_mapped = 0
     auto_resolvable = 0
     ambiguous = 0
+    near_match_only = 0
     unmatched = 0
     stale_mapped = 0
     sample_lines: list[str] = []
@@ -471,6 +514,15 @@ async def tech_map_status(
                     f"ambiguous: {member.get('display_name') or member.get('username')}"
                 )
         else:
+            nearby = _near_match_techs_for_member_record(member, techs)
+            if nearby:
+                near_match_only += 1
+                if len(sample_lines) < 8:
+                    best = nearby[0]
+                    sample_lines.append(
+                        f"near match: {member.get('display_name') or member.get('username')} -> {best.get('name')} ({best.get('id')}, score {best.get('score')})"
+                    )
+                continue
             unmatched += 1
             if len(sample_lines) < 8:
                 sample_lines.append(
@@ -484,6 +536,7 @@ async def tech_map_status(
         f"Explicitly mapped in env: {explicit_mapped}",
         f"Auto-resolvable by exact name: {auto_resolvable}",
         f"Ambiguous exact-name matches: {ambiguous}",
+        f"Near-match review candidates: {near_match_only}",
         f"Unmatched: {unmatched}",
     ]
     if stale_mapped:
@@ -623,6 +676,7 @@ async def suggest_tech_map(
         (
             f"Wrote suggested tech map to `{suggestion_path}` and env snippet to `{env_path}`. "
             f"Matched {len(suggestion['matched'])}, ambiguous {len(suggestion['ambiguous'])}, "
+            f"near matches {len(suggestion['near_matches'])}, "
             f"unmatched Discord {len(suggestion['unmatched_discord'])}, "
             f"unmatched BlueFolder {len(suggestion['unmatched_bluefolder'])}."
         ),
@@ -1144,30 +1198,34 @@ async def eta(interaction: discord.Interaction, sr_id: int, minutes: int) -> Non
     )
 
 
-@bot.tree.command(name="enroute", description="Mark yourself en route for your assigned service request.")
-@app_commands.describe(sr_id="BlueFolder service request ID")
-async def enroute(interaction: discord.Interaction, sr_id: int) -> None:
+@bot.tree.command(name="enroute", description="Mark yourself en route and optionally record ETA.")
+@app_commands.describe(sr_id="BlueFolder service request ID", minutes="Optional ETA in minutes")
+async def enroute(interaction: discord.Interaction, sr_id: int, minutes: int | None = None) -> None:
     await interaction.response.defer(ephemeral=True)
     tech_id = _my_tech_id(interaction)
     if not tech_id:
         await interaction.followup.send(_my_tech_help(), ephemeral=True)
         return
+    if minutes is not None and minutes < 0:
+        await interaction.followup.send("ETA minutes must be zero or greater.", ephemeral=True)
+        return
 
-    result = bot.bluefolder.mark_enroute(sr_id, user_id=tech_id)
+    result = bot.bluefolder.mark_enroute(sr_id, user_id=tech_id, minutes=minutes)
     if not result.get("ok"):
         await interaction.followup.send(
             f"Could not mark `{sr_id}` en route: {result.get('error') or 'unknown error'}",
             ephemeral=True,
         )
         return
+    response_lines = [
+        f"Marked service request `{sr_id}` en route.",
+        f"Stored as: {result.get('stored_as')}",
+        f"Time: {result.get('timestamp')}",
+    ]
+    if minutes is not None:
+        response_lines.append(f"ETA: {result.get('eta_minutes')} minutes")
     await interaction.followup.send(
-        "\n".join(
-            [
-                f"Marked service request `{sr_id}` en route.",
-                f"Stored as: {result.get('stored_as')}",
-                f"Time: {result.get('timestamp')}",
-            ]
-        ),
+        "\n".join(response_lines),
         ephemeral=True,
     )
 

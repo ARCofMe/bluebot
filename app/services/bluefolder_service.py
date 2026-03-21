@@ -1120,7 +1120,7 @@ class BlueFolderService:
             "recorded_at": eta_at.isoformat(timespec="minutes"),
         }
 
-    def mark_enroute(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
+    def mark_enroute(self, sr_id: int, *, user_id: int, minutes: int | None = None) -> dict[str, Any]:
         assignment = self.get_assignment_for_sr_in_workflow_window(user_id, sr_id)
         if not assignment:
             return {"ok": False, "error": "No assignment for this SR is mapped to you in the configured workflow window."}
@@ -1134,11 +1134,27 @@ class BlueFolderService:
         )
         if not write_result.get("ok"):
             return write_result
+        eta_write_result = None
+        if minutes is not None:
+            eta_msg = f"ETA update: arriving in {minutes} minutes."
+            eta_write_result = self._write_workflow_update(
+                sr_id,
+                user_id=user_id,
+                assignment_id=int(assignment["assignment_id"]),
+                text=eta_msg,
+            )
+            if not eta_write_result.get("ok"):
+                return eta_write_result
         return {
             "ok": True,
             "assignment_id": assignment["assignment_id"],
-            "stored_as": write_result.get("stored_as"),
+            "stored_as": (
+                f"{write_result.get('stored_as')} + {eta_write_result.get('stored_as')}"
+                if eta_write_result
+                else write_result.get("stored_as")
+            ),
             "timestamp": now.isoformat(timespec="minutes"),
+            "eta_minutes": minutes,
         }
 
     def mark_start(self, sr_id: int, *, user_id: int) -> dict[str, Any]:
