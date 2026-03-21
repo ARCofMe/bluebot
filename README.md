@@ -1,17 +1,42 @@
 # Parts Cannon Discord Extension
 
-Minimal Python Discord bot that uses the local `bluefolder-api` wrapper to surface BlueFolder data for technicians in the field.
+Discord bot for ARCoM technicians, dispatch, parts, and office staff. It uses the local `bluefolder-api` wrapper to read and write BlueFolder workflow data from slash commands.
 
-## Features
+## What It Does
 
-- Slash-command based Discord bot
-- Uses the local `bluefolder-api` repo via `BLUEFOLDER_API_PATH`
-- Phase 1 field-tech commands for schedules, service request lookup, notes, and waiver links
+- Surfaces BlueFolder schedules, service requests, notes, labor, materials, equipment, and customer/site info
+- Lets mapped technicians log workflow updates from Discord
+- Gives dispatch and parts staff focused summary commands
+- Exports Discord member/mapping audits to JSON and ready-to-paste env snippets
+- Keeps BlueFolder as the system of record; the bot does not maintain its own workflow database
+
+## Current Command Areas
+
+- General: health, help, BlueFolder status, waiver link generation
+- Service Requests: SR detail, customer/site detail, notes/history, troubleshooting, attachments, labor, materials, equipment, customer search, SR search
+- Tech Schedules: `my_jobs`, `my_day`, `my_week`, `next_job`, `my_status`, `my_next_packet`
+- Workflow Updates: `note_add`, `eta`, `enroute`, `start`, `complete`, `no_answer`, `not_home`, `access_issue`, `missing_part`, `damaged_part`
+- Dispatch: `today_board`, `next_openings`, `assignments_today`, `tech_day`, `tech_loads`, `who_has_sr`, `sr_brief`, `export_today_board`
+- Parts: `parts_brief`, `parts_notes`
+- Mapping/Admin: `who_am_i_mapped_to`, `tech_map_status`, `lookup_member`, `role_audit`, `mapping_drift`, `export_member_map`, `export_mapping_audit`, `suggest_tech_map`
+
+`/help` is access-filtered. Users only see commands they can actually run.
+
+## Access Model
+
+- Admin access: Discord `Manage Server` or one of `DISCORD_ADMIN_ROLE_NAMES`
+- Dispatcher access: dispatcher role or admin access
+- Parts access: parts role, dispatcher access, or admin access
+- Mapped-tech access: user resolves to a BlueFolder tech through `DISCORD_TECH_MAP` or exact-name matching
+
+Write commands that act as the technician require mapped-tech access.
+
+See [access-and-exports.md](/home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension/docs/access-and-exports.md) for the current role model and export artifacts.
 
 ## Quick Start
 
 ```bash
-cd bluebot-discord-extension
+cd /home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -21,108 +46,119 @@ python -m app.main
 
 ## Environment
 
-See `.env.example`.
+Copy [`.env.example`](/home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension/.env.example) to `.env`.
 
 Important variables:
 
 - `DISCORD_BOT_TOKEN`
-- `DISCORD_GUILD_ID` (optional, but recommended while developing)
-- `DISCORD_TECH_MAP` JSON mapping of Discord user IDs to BlueFolder tech IDs for `/my_jobs` and `/next_job`
-- `DISPATCHER_ALERT_CHANNEL_ID` to post no-answer, not-home, and access-issue alerts into a dispatcher-visible Discord channel
-- `DISPATCHER_ALERT_ON_CONTACT_ISSUE` to enable or disable those channel notifications
-- `PARTS_ALERT_CHANNEL_ID` to post missing-part and damaged-part alerts into a parts-facing Discord channel
-- `PARTS_ALERT_ON_CONTACT_ISSUE` to enable or disable those parts-channel notifications
+- `DISCORD_GUILD_ID`
+- `DISCORD_TECH_MAP`
+- `DISCORD_ADMIN_ROLE_NAMES`
+- `DISCORD_TECH_ROLE_NAMES`
+- `DISCORD_DISPATCHER_ROLE_NAMES`
+- `DISCORD_PARTS_ROLE_NAMES`
+- `DISPATCHER_ALERT_CHANNEL_ID`
+- `DISPATCHER_ALERT_ON_CONTACT_ISSUE`
+- `PARTS_ALERT_CHANNEL_ID`
+- `PARTS_ALERT_ON_CONTACT_ISSUE`
+- `DISCORD_MEMBER_EXPORT_PATH`
+- `DISCORD_EXPORT_TIMESTAMPED`
 - `BLUEFOLDER_API_KEY`
 - `BLUEFOLDER_ACCOUNT_NAME`
-- `BLUEFOLDER_BASE_URL` / `BLUEFOLDER_HOST_HEADER` when your working setup uses an IP-based BlueFolder endpoint
-- `BLUEFOLDER_API_PATH` (optional override; otherwise the bot looks for a sibling `../bluefolder-api` repo)
-- `BLUEFOLDER_COMMENT_USER_ID` fallback BlueFolder user ID for `note_add` when the Discord user is not mapped in `DISCORD_TECH_MAP`
-- `ASSIGNMENT_CACHE_TTL_SECONDS` to cache per-tech assignment windows and reduce repeated BlueFolder calls
-- `WORKFLOW_WRITE_ASSIGNMENT` to control whether `/eta`, `/enroute`, `/start`, and `/complete` write to assignment records
-- `WORKFLOW_WRITE_SR_NOTE` to control whether those workflow commands also append internal service request notes
-- `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_BEFORE` to allow workflow commands to match assignments before today
-- `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_AFTER` to allow workflow commands to match assignments after today
-- `WAIVER_BASE_URL` to enable `/waiver`
-- `WAIVER_SR_PARAM`, `WAIVER_NAME_PARAM`, `WAIVER_FIRST_NAME_PARAM`, and `WAIVER_LAST_NAME_PARAM` to control the waiver query-string keys
+- `BLUEFOLDER_BASE_URL`
+- `BLUEFOLDER_HOST_HEADER`
+- `BLUEFOLDER_VERIFY_SSL`
+- `BLUEFOLDER_TIMEOUT_SECONDS`
+- `BLUEFOLDER_COMMENT_USER_ID`
+- `BLUEFOLDER_API_PATH`
+- `ASSIGNMENT_CACHE_TTL_SECONDS`
+- `WORKFLOW_WRITE_ASSIGNMENT`
+- `WORKFLOW_WRITE_SR_NOTE`
+- `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_BEFORE`
+- `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_AFTER`
+- `WAIVER_BASE_URL`
+- `WAIVER_SR_PARAM`
+- `WAIVER_NAME_PARAM`
+- `WAIVER_FIRST_NAME_PARAM`
+- `WAIVER_LAST_NAME_PARAM`
+
+## Mapping and Role Setup
+
+Minimum useful setup:
+
+1. Set `DISCORD_TECH_MAP` for known technicians.
+2. Set role names for admin, dispatcher, tech, and parts if you want role-based access.
+3. Enable Discord `Server Members Intent` if you want full guild member exports and mapping suggestions.
+
+Recommended admin workflow:
+
+1. Run `/export_member_map scope:guild`.
+2. Run `/suggest_tech_map scope:guild`.
+3. Review the generated JSON and env snippet.
+4. Paste the suggested `DISCORD_TECH_MAP=...` into `.env`.
+5. Restart the bot.
+
+The mapping suggestion flow is conservative:
+
+- exact normalized name matches are suggested automatically
+- near matches are exported for review
+- ambiguous and unmatched users are called out explicitly
+
+## Write Command Behavior
+
+Technician write commands are preview-first.
+
+- `note_add`
+- `no_answer`
+- `not_home`
+- `access_issue`
+- `missing_part`
+- `damaged_part`
+- `eta`
+- `enroute`
+- `start`
+- `complete`
+
+These commands send a preview unless `confirm:true` is supplied. Example:
+
+```text
+/enroute sr_id:12345 minutes:20 confirm:true
+```
+
+`/enroute` accepts an optional `minutes` value and records the ETA update in the same action.
+
+## Workflow Storage Model
+
+Parts Cannon does not keep its own workflow database.
+
+- ETA, en route, and start updates can write to BlueFolder assignment comments and internal SR notes
+- Complete uses BlueFolder assignment completion and can also add an internal SR note
+- Write targets are controlled by `WORKFLOW_WRITE_ASSIGNMENT` and `WORKFLOW_WRITE_SR_NOTE`
+- Assignment ownership remains enforced, but the lookup window is configurable with `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_BEFORE` and `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_AFTER`
+- Dispatcher and parts alert channels can receive contact and parts issue notifications
+- The assignment cache is short-lived and is cleared after workflow writes
+
+BlueFolder remains the system of record for technician workflow history.
+
+## Testing
+
+Current lightweight stabilization suite:
+
+```bash
+cd /home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension
+source .venv/bin/activate
+pytest tests -q
+```
+
+The current tests cover:
+
+- access control helpers
+- help visibility by role/mapping
+- write-preview behavior for mapped-tech commands
 
 ## Notes
 
-- This bot uses slash commands, so the bot must be invited with the `applications.commands` scope.
-- If `DISCORD_GUILD_ID` is set, commands are synced to that guild for faster iteration.
-- `requests` is required at runtime because the local `bluefolder-api` wrapper uses it for real HTTP calls; if it is missing, BlueFolder lookups will fail with empty/invalid XML responses.
-
-## Commands
-
-### Health and Setup
-
-- `/help` shows the current command set.
-- `/ping` verifies bot connectivity.
-- `/bf_status` shows BlueFolder connectivity and config status.
-
-### Technician Day
-
-- `/my_jobs` shows today's assignments for the mapped Discord user.
-- `/next_job` shows the next scheduled assignment for the mapped Discord user.
-- `/eta sr_id:<id> minutes:<n>` records an ETA update for your assigned job.
-- `/enroute sr_id:<id>` records an en-route update for your assigned job.
-- `/start sr_id:<id>` records that work has started on your assigned job.
-- `/complete sr_id:<id>` completes your assigned assignment in BlueFolder.
-- `/no_answer sr_id:<id> [details]` logs that the customer did not answer.
-- `/not_home sr_id:<id> [details]` logs that the customer was not home at arrival.
-- `/access_issue sr_id:<id> details:<text>` logs an access problem for the job.
-- `/missing_part sr_id:<id> details:<text>` logs a missing part issue for the job.
-- `/damaged_part sr_id:<id> details:<text>` logs a damaged part issue for the job.
-- `/waiver sr_id:<id>` builds a prefilled waiver link when `WAIVER_BASE_URL` is configured.
-
-### Service Request Detail
-
-- `/sr sr_id:<id>` shows a service request summary.
-- `/customer sr_id:<id>` shows customer details and contacts for the service request.
-- `/site sr_id:<id>` shows the site address and site notes.
-- `/notes sr_id:<id>` shows the most recent service request comments.
-- `/history sr_id:<id>` shows a broader service request history feed.
-- `/troubleshoot sr_id:<id>` pulls recent complaint, diagnosis, and work-performed context when available.
-- `/note_add sr_id:<id> text:<text>` adds an internal service request note.
-- `/attachments sr_id:<id>` lists recent service request attachments.
-- `/equipment sr_id:<id>` lists equipment for the customer/site.
-- `/materials sr_id:<id>` lists recorded materials for the service request.
-- `/labor sr_id:<id>` lists recorded labor for the service request.
-
-### Search and Lookup
-
-- `/search_customer text:<text>` searches the BlueFolder customer directory.
-- `/search_address text:<text>` is currently limited by available BlueFolder endpoints on this tenant.
-- `/user user_id:<id>` looks up a BlueFolder user.
-- `/customer_lookup customer_id:<id>` looks up a BlueFolder customer.
-- `/techs` lists active BlueFolder technicians.
-
-### Dispatcher Views
-
-- `/assignments_today tech_id:<id>` shows a technician's day by BlueFolder ID.
-- `/tech_day tech_id:<id> when:<YYYY-MM-DD>` shows one technician's assignments on a specific day.
-- `/tech_loads` shows today's assignment counts by technician.
-- `/who_has_sr sr_id:<id>` finds who has a service request assigned in the next 14 days.
-
-Materials and labor are read from the `serviceRequests/get` payload for the SR. On this tenant, standalone `materials/list` and `labor/list` endpoints are not reliable.
-
-## Workflow Data Model
-
-Parts Cannon does not keep its own database for technician workflow state.
-
-- ETA, en route, and start updates are written to BlueFolder in two places: the assignment comment for the mapped technician's assignment and an internal service request note.
-- Complete uses BlueFolder's assignment completion endpoint and also writes an internal service request note.
-- The write targets are configuration-driven with `WORKFLOW_WRITE_ASSIGNMENT=true` and `WORKFLOW_WRITE_SR_NOTE=true`.
-- Assignment ownership is still enforced, but the lookup window is configurable with `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_BEFORE` and `WORKFLOW_ASSIGNMENT_LOOKUP_DAYS_AFTER`. For example, `0` and `7` allows testing against the next week's assigned jobs.
-- The bot's in-memory assignment cache is only a short-lived read cache to reduce repeated BlueFolder calls. It is cleared after workflow writes so the next lookup reflects current BlueFolder state.
-- No-answer, not-home, and access-issue commands can also post a dispatcher-facing alert to a Discord channel when `DISPATCHER_ALERT_CHANNEL_ID` is configured.
-- Missing-part and damaged-part commands can also post to a separate parts-facing Discord channel when `PARTS_ALERT_CHANNEL_ID` is configured.
-
-This means BlueFolder remains the system of record for ETA, start time, and completion history.
-
-## Planned Enhancements
-
-- Writing waiver links or signed state back to BlueFolder custom fields.
-- Technician-facing reminders for overdue jobs, closeout tasks, and upcoming assignments.
-- Route-aware dispatcher commands like `/route_today` and task suggestions.
-- Richer troubleshooting helpers, policy lookups, and closeout checklists.
-- Packaging for long-running deployment on Debian or Raspberry Pi.
+- The bot uses slash commands and needs the `applications.commands` scope.
+- If `DISCORD_GUILD_ID` is set, command sync is limited to that guild for faster iteration.
+- `requests` is still required at runtime because the local `bluefolder-api` wrapper depends on it.
+- Generated admin artifacts go under `exports/` and are gitignored.
