@@ -675,6 +675,25 @@ async def _send_write_preview(
     await _send_response_text(interaction, "\n".join(lines), ephemeral=True)
 
 
+def _issue_result_lines(
+    action_text: str,
+    sr_id: int,
+    result: dict[str, object],
+    *,
+    alert_status: str | None = None,
+) -> list[str]:
+    lines = [
+        f"{action_text} for service request `{sr_id}`.",
+        f"Time: {result.get('logged_at')}",
+    ]
+    note_text = result.get("note_text")
+    if note_text:
+        lines.append(str(note_text))
+    if alert_status:
+        lines.append(alert_status)
+    return lines
+
+
 async def _require_mapped_tech_or_reply(interaction: discord.Interaction) -> int | None:
     tech_id = _mapped_tech_id(interaction)
     if tech_id:
@@ -2089,13 +2108,12 @@ async def no_answer(interaction: discord.Interaction, sr_id: int, details: str |
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
-    response_lines = [
-        f"Logged no-answer for service request `{sr_id}`.",
-        f"Time: {result.get('logged_at')}",
-        result.get("note_text") or "",
-    ]
-    if alert_status:
-        response_lines.append(alert_status)
+    response_lines = _issue_result_lines(
+        "Logged no-answer",
+        sr_id,
+        result,
+        alert_status=alert_status,
+    )
     await interaction.followup.send(
         "\n".join(response_lines),
         ephemeral=True,
@@ -2140,13 +2158,12 @@ async def not_home(interaction: discord.Interaction, sr_id: int, details: str | 
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
-    response_lines = [
-        f"Logged not-home for service request `{sr_id}`.",
-        f"Time: {result.get('logged_at')}",
-        result.get("note_text") or "",
-    ]
-    if alert_status:
-        response_lines.append(alert_status)
+    response_lines = _issue_result_lines(
+        "Logged not-home",
+        sr_id,
+        result,
+        alert_status=alert_status,
+    )
     await interaction.followup.send(
         "\n".join(response_lines),
         ephemeral=True,
@@ -2194,13 +2211,12 @@ async def access_issue(interaction: discord.Interaction, sr_id: int, details: st
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
-    response_lines = [
-        f"Logged access issue for service request `{sr_id}`.",
-        f"Time: {result.get('logged_at')}",
-        result.get("note_text") or "",
-    ]
-    if alert_status:
-        response_lines.append(alert_status)
+    response_lines = _issue_result_lines(
+        "Logged access issue",
+        sr_id,
+        result,
+        alert_status=alert_status,
+    )
     await interaction.followup.send(
         "\n".join(response_lines),
         ephemeral=True,
@@ -2248,13 +2264,12 @@ async def missing_part(interaction: discord.Interaction, sr_id: int, details: st
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
-    response_lines = [
-        f"Logged missing-part issue for service request `{sr_id}`.",
-        f"Time: {result.get('logged_at')}",
-        result.get("note_text") or "",
-    ]
-    if alert_status:
-        response_lines.append(alert_status)
+    response_lines = _issue_result_lines(
+        "Logged missing-part issue",
+        sr_id,
+        result,
+        alert_status=alert_status,
+    )
     await interaction.followup.send("\n".join(response_lines), ephemeral=True)
 
 
@@ -2299,13 +2314,12 @@ async def damaged_part(interaction: discord.Interaction, sr_id: int, details: st
         customer_name=result.get("customer_name"),
         address=result.get("address"),
     )
-    response_lines = [
-        f"Logged damaged-part issue for service request `{sr_id}`.",
-        f"Time: {result.get('logged_at')}",
-        result.get("note_text") or "",
-    ]
-    if alert_status:
-        response_lines.append(alert_status)
+    response_lines = _issue_result_lines(
+        "Logged damaged-part issue",
+        sr_id,
+        result,
+        alert_status=alert_status,
+    )
     await interaction.followup.send("\n".join(response_lines), ephemeral=True)
 
 

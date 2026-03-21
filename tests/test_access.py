@@ -308,3 +308,35 @@ def test_sr_handles_bluefolder_exception_with_followup(monkeypatch):
     assert interaction.response.deferred is True
     assert interaction.followup.messages
     assert interaction.followup.messages[0]["content"] == "BlueFolder lookup failed for `12345`: timeout"
+
+
+def test_missing_part_reports_logged_success_even_if_alert_fails(monkeypatch):
+    class PartsBlueFolder:
+        def resolve_tech_id(self, discord_user_id, candidate_names=None):
+            return 33538043
+
+        def log_parts_issue(self, sr_id, *, user_id, issue_type, details):
+            return {
+                "ok": True,
+                "logged_at": "2026-03-21T18:00",
+                "note_text": "Missing part reported at 6:00 PM. Details: compressor.",
+                "customer_name": "Acme Bakery",
+                "address": "123 Main St",
+            }
+
+    monkeypatch.setattr(client.bot, "bluefolder", PartsBlueFolder())
+
+    async def fake_send_channel_alert(*args, **kwargs):
+        return "Parts alert could not be sent."
+
+    monkeypatch.setattr(client, "_send_channel_alert", fake_send_channel_alert)
+    interaction = _interaction(user_id=42)
+
+    asyncio.run(client.missing_part(interaction, sr_id=12345, details="compressor", confirm=True))
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages
+    content = interaction.followup.messages[0]["content"]
+    assert "Logged missing-part issue for service request `12345`." in content
+    assert "Missing part reported at 6:00 PM. Details: compressor." in content
+    assert "Parts alert could not be sent." in content
