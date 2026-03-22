@@ -340,3 +340,27 @@ def test_missing_part_reports_logged_success_even_if_alert_fails(monkeypatch):
     assert "Logged missing-part issue for service request `12345`." in content
     assert "Missing part reported at 6:00 PM. Details: compressor." in content
     assert "Parts alert could not be sent." in content
+
+
+def test_notes_command_splits_long_followup_output(monkeypatch):
+    class NotesBlueFolder:
+        def get_service_request_notes(self, sr_id):
+            return [
+                {
+                    "dateCreated": f"2026-03-21T0{idx}:00:00",
+                    "author": "Tech",
+                    "entryType": "Note",
+                    "text": "x" * 900,
+                }
+                for idx in range(4)
+            ]
+
+    monkeypatch.setattr(client.bot, "bluefolder", NotesBlueFolder())
+    interaction = _interaction()
+
+    asyncio.run(client.notes(interaction, sr_id=12345))
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages
+    assert len(interaction.followup.messages) >= 2
+    assert all(len(message["content"]) <= client._DISCORD_MESSAGE_LIMIT for message in interaction.followup.messages)

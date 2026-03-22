@@ -1588,7 +1588,7 @@ async def today_board(interaction: discord.Interaction) -> None:
         lines.append(
             f"{item.get('tech_name') or 'Unknown'} ({item.get('tech_id')}): {item.get('assignment_count')} assignment(s), first at {first_start}, last end {last_end}"
         )
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="next_openings", description="Show which techs are lightest today.")
@@ -1627,7 +1627,7 @@ async def next_openings(interaction: discord.Interaction) -> None:
         lines.append(
             f"{item.get('tech_name') or 'Unknown'} ({item.get('tech_id')}): {item.get('assignment_count')} assignment(s), first at {item.get('first_start') or 'no start time'}"
         )
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="sr_brief", description="Show a compact dispatch summary for a service request.")
@@ -1690,7 +1690,7 @@ async def sr_brief(interaction: discord.Interaction, sr_id: int) -> None:
         if latest.get("text"):
             lines.append(f"Latest text: {latest['text'][:200]}")
 
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="parts_brief", description="Show a compact parts-facing summary for a service request.")
@@ -1733,7 +1733,7 @@ async def parts_brief(interaction: discord.Interaction, sr_id: int) -> None:
     else:
         lines.append("No recent parts-related notes found.")
 
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="parts_notes", description="Show recent parts-related notes for a service request.")
@@ -1771,7 +1771,7 @@ async def parts_notes(interaction: discord.Interaction, sr_id: int) -> None:
                 ]
             )
         )
-    await interaction.followup.send("\n\n---\n\n".join(blocks), ephemeral=True)
+    await _send_followup_text(interaction, "\n\n---\n\n".join(blocks), ephemeral=True)
 
 
 @bot.tree.command(name="next_job", description="Show your next scheduled assignment today.")
@@ -1800,7 +1800,7 @@ async def next_job(interaction: discord.Interaction) -> None:
         f"End: {item.get('end_display') or item.get('end') or 'n/a'}",
         f"Subject: {item.get('subject') or 'Service Request'}",
     ]
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="assignments_today", description="Show today's assignments for a technician.")
@@ -1831,7 +1831,7 @@ async def assignments_today(interaction: discord.Interaction, tech_id: int) -> N
         start = item.get("start_display") or item.get("start") or "unscheduled"
         subject = item.get("subject") or "Service Request"
         lines.append(f"{idx}. SR {sr_id} - {start} - {subject}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="sr", description="Look up a BlueFolder service request.")
@@ -1850,7 +1850,7 @@ async def sr(interaction: discord.Interaction, sr_id: int) -> None:
     ]
     if item.get("address"):
         lines.append(f"Address: {item['address']}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="job_packet", description="Show a compact field packet for one service request.")
@@ -1898,7 +1898,7 @@ async def customer(interaction: discord.Interaction, sr_id: int) -> None:
             bits.append(contact["email"])
         prefix = "Primary Contact" if contact.get("is_primary") else "Contact"
         lines.append(f"{prefix}: {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="site", description="Show site address and site notes for a service request.")
@@ -1915,7 +1915,7 @@ async def site(interaction: discord.Interaction, sr_id: int) -> None:
     ]
     if item.get("site_notes"):
         lines.append(f"Site Notes: {item['site_notes']}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="notes", description="Show recent notes for a service request.")
@@ -1948,7 +1948,7 @@ async def notes(interaction: discord.Interaction, sr_id: int) -> None:
             ]
         )
         blocks.append(block)
-    await interaction.followup.send("\n\n---\n\n".join(blocks), ephemeral=True)
+    await _send_followup_text(interaction, "\n\n---\n\n".join(blocks), ephemeral=True)
 
 
 @bot.tree.command(name="history", description="Show broader service request history.")
@@ -1979,7 +1979,7 @@ async def history(interaction: discord.Interaction, sr_id: int) -> None:
                 ]
             )
         )
-    await interaction.followup.send("\n\n---\n\n".join(blocks), ephemeral=True)
+    await _send_followup_text(interaction, "\n\n---\n\n".join(blocks), ephemeral=True)
 
 
 @bot.tree.command(name="note_add", description="Add an internal note to a service request.")
@@ -2067,7 +2067,7 @@ async def troubleshoot(interaction: discord.Interaction, sr_id: int) -> None:
         if latest.get("text"):
             lines.append(f"Latest Text: {latest['text'][:250]}")
 
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="no_answer", description="Log that the customer did not answer.")
@@ -2270,7 +2270,7 @@ async def missing_part(interaction: discord.Interaction, sr_id: int, details: st
         result,
         alert_status=alert_status,
     )
-    await interaction.followup.send("\n".join(response_lines), ephemeral=True)
+    await _send_followup_lines(interaction, response_lines, ephemeral=True)
 
 
 @bot.tree.command(name="damaged_part", description="Log a damaged part issue for a service request.")
@@ -2320,7 +2320,7 @@ async def damaged_part(interaction: discord.Interaction, sr_id: int, details: st
         result,
         alert_status=alert_status,
     )
-    await interaction.followup.send("\n".join(response_lines), ephemeral=True)
+    await _send_followup_lines(interaction, response_lines, ephemeral=True)
 
 
 @bot.tree.command(name="eta", description="Record an ETA update for your assigned service request.")
@@ -2491,7 +2491,7 @@ async def attachments(interaction: discord.Interaction, sr_id: int) -> None:
         if row.get("description"):
             bits.append(row["description"])
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="equipment", description="List customer equipment for a service request site.")
@@ -2522,7 +2522,7 @@ async def equipment(interaction: discord.Interaction, sr_id: int) -> None:
         if row.get("manufacturer"):
             bits.append(f"mfr={row['manufacturer']}")
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="materials", description="List materials recorded against a service request.")
@@ -2551,7 +2551,7 @@ async def materials(interaction: discord.Interaction, sr_id: int) -> None:
         if row.get("total"):
             bits.append(f"total={row['total']}")
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="labor", description="List labor recorded against a service request.")
@@ -2582,7 +2582,7 @@ async def labor(interaction: discord.Interaction, sr_id: int) -> None:
         if row.get("description"):
             bits.append(row["description"])
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="search_customer", description="Search the BlueFolder customer directory.")
@@ -2606,7 +2606,7 @@ async def search_customer(interaction: discord.Interaction, text: str) -> None:
     for idx, row in enumerate(rows, start=1):
         bits = [f"Customer {row.get('id')}", row.get("subject") or "Customer"]
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="find_sr", description="Search recent service requests by SR id or subject.")
@@ -2634,7 +2634,7 @@ async def find_sr(interaction: discord.Interaction, text: str) -> None:
         if row.get("start"):
             bits.append(str(row["start"]))
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="search_address", description="Address search is limited on this BlueFolder tenant.")
@@ -2663,7 +2663,7 @@ async def search_address(interaction: discord.Interaction, text: str) -> None:
         if row.get("address"):
             bits.append(row["address"])
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="user", description="Look up a BlueFolder user.")
@@ -2695,7 +2695,7 @@ async def user(interaction: discord.Interaction, user_id: int) -> None:
         f"Type: {item.get('user_type') or 'n/a'}",
         f"Active: {item.get('is_active')}",
     ]
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="customer_lookup", description="Look up a BlueFolder customer.")
@@ -2726,7 +2726,7 @@ async def customer_lookup(interaction: discord.Interaction, customer_id: int) ->
         f"Type: {item.get('type') or 'n/a'}",
         f"Inactive: {item.get('inactive')}",
     ]
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="bf_status", description="Show BlueFolder connectivity/config status.")
@@ -2749,7 +2749,7 @@ async def bf_status(interaction: discord.Interaction) -> None:
         lines.append(f"Active Techs: {status.get('active_tech_count')}")
     else:
         lines.append(f"Error: {status.get('error') or 'unknown'}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="tech_loads", description="Show today's assignment counts by technician.")
@@ -2777,7 +2777,7 @@ async def tech_loads(interaction: discord.Interaction) -> None:
         if row.get("first_start"):
             bits.append(f"first={row['first_start']}")
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="tech_day", description="Show assignments for a technician on a specific day.")
@@ -2816,7 +2816,7 @@ async def tech_day(interaction: discord.Interaction, tech_id: int, when: str) ->
             item.get("subject") or "Service Request",
         ]
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="who_has_sr", description="Find who has a service request in the next 14 days.")
@@ -2850,7 +2850,7 @@ async def who_has_sr(interaction: discord.Interaction, sr_id: int) -> None:
         if row.get("subject"):
             bits.append(row["subject"])
         lines.append(f"{idx}. {' | '.join(bits)}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await _send_followup_lines(interaction, lines, ephemeral=True)
 
 
 @bot.tree.command(name="waiver", description="Generate a prefilled waiver link for a service request.")
