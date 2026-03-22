@@ -7,7 +7,7 @@
 - Parts: configured parts role, dispatcher, or admin
 - Mapped tech: Discord user resolves to a BlueFolder tech through `DISCORD_TECH_MAP` or exact-name matching
 
-Command help and runtime access now use the same policy table in [client.py](/home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension/app/bot/client.py).
+Command help and runtime access now use the same policy table in `app/bot/client.py`.
 
 ## Admin Export Commands
 

@@ -31,12 +31,12 @@ Discord bot for ARCoM technicians, dispatch, parts, and office staff. It uses th
 
 Write commands that act as the technician require mapped-tech access.
 
-See [access-and-exports.md](/home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension/docs/access-and-exports.md) for the current role model and export artifacts.
+See `docs/access-and-exports.md` for the current role model and export artifacts.
 
 ## Quick Start
 
 ```bash
-cd /home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension
+cd bluebot-discord-extension
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -46,7 +46,7 @@ python -m app.main
 
 ## Environment
 
-Copy [`.env.example`](/home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension/.env.example) to `.env`.
+Copy `.env.example` to `.env`.
 
 Important variables:
 
@@ -145,7 +145,7 @@ BlueFolder remains the system of record for technician workflow history.
 Current lightweight stabilization suite:
 
 ```bash
-cd /home/ner0tic/Documents/Projects/ARCoM/bluebot-discord-extension
+cd bluebot-discord-extension
 source .venv/bin/activate
 pytest tests -q
 ```
@@ -155,6 +155,8 @@ The current tests cover:
 - access control helpers
 - help visibility by role/mapping
 - write-preview behavior for mapped-tech commands
+
+For real-environment verification, use `docs/live-validation.md`.
 
 ## Notes
 
