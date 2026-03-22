@@ -15,6 +15,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
+        settings.validate_or_raise()
         bot.run(settings.discord_bot_token)
     except Exception:
         logger.exception("Discord bot terminated during startup or runtime.")

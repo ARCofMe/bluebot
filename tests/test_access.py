@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.bot import client
+from app import main
 
 
 class DummyBlueFolder:
@@ -364,3 +365,21 @@ def test_notes_command_splits_long_followup_output(monkeypatch):
     assert interaction.followup.messages
     assert len(interaction.followup.messages) >= 2
     assert all(len(message["content"]) <= client._DISCORD_MESSAGE_LIMIT for message in interaction.followup.messages)
+
+
+def test_main_validates_settings_before_bot_run(monkeypatch):
+    calls = []
+
+    def fake_validate():
+        calls.append("validate")
+
+    def fake_run(token):
+        calls.append(("run", token))
+
+    monkeypatch.setattr(main.settings, "validate_or_raise", fake_validate)
+    monkeypatch.setattr(main.settings, "discord_bot_token", "token")
+    monkeypatch.setattr(main.bot, "run", fake_run, raising=False)
+
+    main.main()
+
+    assert calls == ["validate", ("run", "token")]
